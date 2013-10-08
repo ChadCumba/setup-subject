@@ -114,7 +114,7 @@ def main(argv=None):
         parser.add_option("-i", "--in", dest="infile", help="set input path [default: %default]", metavar="FILE")
         parser.add_option("-o", "--out", dest="outfile", help="set output path [default: %default]", metavar="FILE")
         parser.add_option("-v", "--verbose", dest="verbose", action="count", help="set verbosity level [default: %default]")
-        parser.add_option("-d", "--datadir", dest="data_directory", help="set subject data directory [default: %default]",
+        parser.add_option("-d", "--datadir", dest="data_directory", help="set project data directory [default: %default/ ]",
                           metavar="DIRECTORY")
         parser.add_option("-s", "--subject", dest="subject", help="set subject directory [default: %default]", 
                           metavar="DIRECTORY")
@@ -128,7 +128,7 @@ def main(argv=None):
          
         # set defaults
         parser.set_defaults(outfile="./out.txt", infile="./in.txt", work_directory="./work", task_id=1,
-                            model_id=1, subject="all", get_data=False)
+                            model_id=1, subject="all", get_data=False, data_directory=".")
         # process options
         (opts, args) = parser.parse_args(argv)
         print "wat"
