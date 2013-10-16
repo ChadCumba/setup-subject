@@ -193,8 +193,9 @@ def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_i
                         nipype.interfaces.io.XNATSource(infields=["project", "subject_id"],
                                                         outfields=["anat","bold","behav"]),
                                                   name="datasource")
-        datasource.inputs.template = "*"
-        datasource.inputs.query_template = "/projects/%s/subjects/%s/"
+        datasource.inputs.template = "*dcm"
+        datasource.inputs.query_template = "/xnat-irc/data/archive/projects/%s/subjects/*/experiments/*/scans/ALL/files"
+        
     
     datasource = nipype.pipeline.engine.Node(
                     nipype.interfaces.io.DataGrabber(infields=["subject_id", "run_id",
