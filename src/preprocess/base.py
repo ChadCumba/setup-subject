@@ -328,6 +328,7 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
     #lambda function that just runs pop() on any list you hand it
     pop_last = lambda x: x.pop()
     workflow.connect(datasource, ('dicoms', pop_last), converter, "source_names")
+    workflow.connect(converter, "converted_files", datasink, "niftis")
 
     workflow.base_dir = os.environ.get("SCRATCH", "/tmp")
     workflow.run()
