@@ -7,22 +7,26 @@ preprocess.base is a description
 
 It defines classes_and_methods
 
-@author:     user_name
+@author:     Chad Cumba 
             
-@copyright:  2013 organization_name. All rights reserved.
+@copyright:  2013 Imaging Research Center @ University of Texas. All rights reserved.
             
-@license:    license
+@license:    BSD
 
-@contact:    user_email
-@deffield    updated: Updated
+@contact:    chad.cumba@mail.utexas.edu
+@deffield    updated: 22/10/13
 '''
 
 import sys
 import os
 import glob
+import xnat_tools
+import dicom
+
 import nipype.pipeline.engine
 import nipype.interfaces.utility
 import nipype.interfaces.io
+import nipype.interfaces.dcm2nii
 
 from nipype.interfaces.freesurfer.preprocess import ReconAll
 
@@ -37,6 +41,24 @@ DEBUG = 1
 TESTRUN = 0
 PROFILE = 0
 OUTPUT_DIR = '/work/01551/ccumba/output'
+XNAT_SERVER = "https://xnat.irc.utexas.edu/xnat-irc"
+
+def name_it_bold(input):
+    return 'bold'
+
+def get_dicom_headers(dicom_file):
+    headers = dicom.read_file(dicom_file)
+    return headers
+
+def direct_nifti_to_directory(dicom_headers, nifti_file, subject_directory):
+    """Move nifti file to the correct directory for the subject
+    @param dicom_headers: dicom_header object created by dicom.read_file
+    @param nifti_file: a nifti file to move
+    @param subject_directory: string representing the main directory for the subject
+
+    @return nifti_destination: string representing where the file moved to
+
+    """
 
 #@author Satrajit Ghosh
 def get_subjectinfo(subject_id, base_dir, task_id, model_id):
@@ -125,10 +147,12 @@ def main(argv=None):
         parser.add_option("-w", "--work", dest="work_directory", help="set the directory to store transitional files [default: %default]",
                           metavar="DIRECTORY")
         parser.add_option("-g", "--getdata", dest="get_data", help="get data from XNAT [default: %default]", action="store_true")
+        parser.add_option("-p", "--project", dest="project", help="set the XNAT project name [default: %default]", 
+                          metavar="XNAT PROJECT")
          
         # set defaults
         parser.set_defaults(outfile="./out.txt", infile="./in.txt", work_directory="./work", task_id=1,
-                            model_id=1, subject="all", get_data=False, data_directory=".")
+                            model_id=1, subject="all", get_data=False, data_directory=".", project=None)
         # process options
         (opts, args) = parser.parse_args(argv)
         print "wat"
@@ -140,6 +164,12 @@ def main(argv=None):
             print("outfile = %s" % opts.outfile)
         if opts.subject == "all":
             opts.subject = None
+
+        if opts.get_data:
+            if opts.project is None:
+                raise IOError('Must specify --project when using --getdata')
+            if opts.subject == "all":
+                raise IOError('Must specify --subject when using --getdata, and --subject cannot be "all"')
         
         # MAIN BODY #
     except Exception, e:
@@ -148,6 +178,23 @@ def main(argv=None):
         sys.stderr.write(indent + "  for help use --help\n")
         return 2
     
+    if opts.get_data :
+        #we aren't doing this with an XNATSource node because the current implementation cannot download
+        #more than 10 files at once
+        if DEBUG:
+            print XNAT_SERVER
+            print os.path.join(opts.data_directory, 'raw')
+            print opts.project
+            print opts.subject
+        print "Type your XNAT username and password below"
+        if not os.path.exists(os.path.join(opts.data_directory, opts.subject, 'raw')):
+                os.makedirs(os.path.join(opts.data_directory, opts.subject, 'raw'))
+        #xnat_tools.down_subject_dicoms(XNAT_SERVER, os.path.join(opts.data_directory, opts.subject, 'raw'), opts.project, opts.subject)
+
+        openfmri_dicom_to_nifti(opts.data_directory, opts.subject )
+        if DEBUG:
+            sys.exit(0)
+
     analyze_openfmri_dataset(opts.data_directory, subject=opts.subject, model_id=opts.model_id, task_id=opts.task_id,
                              work_directory=opts.work_directory, xnat_datasource=opts.get_data)
 
@@ -162,7 +209,7 @@ def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_i
     @param task_id - the task to run
     @param work_directory - directory to store transitional files
     """
-    subjects = [path.split(os.path.sep)[-1] for path in glob.glob(os.path.join(data_directory, 'sub*'))]
+    subjects = [path.split(os.path.sep)[-1] for path in glob.glob(os.path.join(data_directory, '*'))]
     
     infosource = nipype.pipeline.engine.Node(
                     nipype.interfaces.utility.IdentityInterface(fields=["subject_id",
@@ -188,14 +235,6 @@ def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_i
     
     subject_info.inputs.base_dir = data_directory
 
-    if xnat_datasource:
-        datasource = nipype.pipeline.engine.Node(
-                        nipype.interfaces.io.XNATSource(infields=["project", "subject_id"],
-                                                        outfields=["anat","bold","behav"]),
-                                                  name="datasource")
-        datasource.inputs.template = "*dcm"
-        datasource.inputs.query_template = "/xnat-irc/data/archive/projects/%s/subjects/*/experiments/*/scans/ALL/files"
-        
     
     datasource = nipype.pipeline.engine.Node(
                     nipype.interfaces.io.DataGrabber(infields=["subject_id", "run_id",
@@ -243,8 +282,56 @@ def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_i
     workflow.connect(cortical_reconstruction, 'T1', datasink, 'highres')
     
     
-    workflow.run(plugin="SGE", plugin_args={"qsub_args":("-l h_rt=1:00:00 -q normal -A Analysis_Lonestar " 
+    workflow.run(plugin="SGE", plugin_args={"qsub_args":("-l h_rt=3:00:00 -q normal -A Analysis_Lonestar " 
                                             "-pe 12way 24 -M chad.cumba@mail.utexas.edu")})
+
+def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
+    
+    scans_container = os.path.join(openfmri_subject_directory, subject_id, 'raw', subject_id)
+    scan_directories = [directory for directory in os.listdir(scans_container)  ]
+    #this is all just to tell it to iterate over the scan directories
+    infosource = nipype.pipeline.engine.Node(
+                    interface=nipype.interfaces.utility.IdentityInterface(fields=['scan_id']),
+                    name="infosource")
+
+    infosource.iterables = ('scan_id', scan_directories)
+    
+    #here we're telling the rest of the nodes where things exist on disk
+    datasource = nipype.pipeline.engine.Node(
+                    nipype.interfaces.io.DataGrabber(infields=["scan_id"],
+                                                     outfields=["dicoms"]),
+                                             name="datasource")
+    datasource.inputs.base_directory = scans_container
+    datasource.inputs.template = "*"
+    datasource.inputs.field_template = {'dicoms' : '%s/*dcm'}
+    datasource.inputs.template_args = {'dicoms' : [['scan_id']]}
+    datasource.inputs.sorted = False
+    datasource.inputs.sort_filelist = False
+
+    
+    #build the nifti converter
+    converter = nipype.pipeline.engine.Node(
+                    nipype.interfaces.dcm2nii.Dcm2nii(terminal_output="file"),
+                    name="nifticonvert"
+    )
+
+    #just a test sink for now
+    datasink = nipype.pipeline.engine.Node(
+                    nipype.interfaces.io.DataSink(base_directory=openfmri_subject_directory),
+                    name="datasink")
+    datasink.base_dir = os.path.join(openfmri_subject_directory, subject_id)
+    datasink.base_directory = datasink.base_dir
+    datasink.inputs.substitutions = [('_scan_id_', '')] 
+    
+    workflow = nipype.pipeline.engine.Workflow(name='dicom2nifti')
+    workflow.connect(infosource, 'scan_id', datasource, 'scan_id')
+    #lambda function that just runs pop() on any list you hand it
+    pop_last = lambda x: x.pop()
+    workflow.connect(datasource, ('dicoms', pop_last), converter, "source_names")
+
+    workflow.base_dir = os.environ.get("SCRATCH", "/tmp")
+    workflow.run()
+    
 
 if __name__ == "__main__":
     if DEBUG:
@@ -264,3 +351,4 @@ if __name__ == "__main__":
         statsfile.close()
         sys.exit(0)
     sys.exit(main())
+
