@@ -27,6 +27,7 @@ import nipype.pipeline.engine
 import nipype.interfaces.utility
 import nipype.interfaces.io
 import nipype.interfaces.dcm2nii
+import nipype.utils.filemanip
 
 from nipype.interfaces.freesurfer.preprocess import ReconAll
 
@@ -43,6 +44,13 @@ PROFILE = 0
 OUTPUT_DIR = '/work/01551/ccumba/output'
 XNAT_SERVER = "https://xnat.irc.utexas.edu/xnat-irc"
 
+ANATOMY = 0
+BOLD = 1
+DTI = 2
+FIELDMAP = 3
+LOCALIZER = 4
+REFERENCE = 5
+
 def name_it_bold(input):
     return 'bold'
 
@@ -50,7 +58,7 @@ def get_dicom_headers(dicom_file):
     headers = dicom.read_file(dicom_file)
     return headers
 
-def direct_nifti_to_directory(dicom_headers, nifti_file, subject_directory):
+def direct_nifti_to_directory(dicom_headers, nifti_file, base_directory):
     """Move nifti file to the correct directory for the subject
     @param dicom_headers: dicom_header object created by dicom.read_file
     @param nifti_file: a nifti file to move
@@ -59,6 +67,106 @@ def direct_nifti_to_directory(dicom_headers, nifti_file, subject_directory):
     @return nifti_destination: string representing where the file moved to
 
     """
+    scan_keys = [['MPRAGE','FSE','T1w','T2w','PDT','PD-T2','tse2d','t2spc','t2_spc'],
+        ['epfid'],
+        ['ep_b'],
+        ['fieldmap','field_mapping'],
+        ['localizer','Scout'],
+        ['SBRef']]
+        
+    file_type = None 
+    
+    nifti_basename = os.path.basename(nifti_file)
+    
+    nifti_extension = '.nii'
+    
+    if os.path.split(nifti_basename)[1] == '.gz':
+        nifti_extension = '.nii.gz'
+    
+    destination = ''
+    
+    for i in range(0,6):
+        for key in scan_keys[i]:
+            if (dicom_headers.ProtocolName.lower().find(key.lower()) > -1) or \
+                (dicom_headers.SeriesDescription.lower().find(key.lower()) > -1) or \
+                (dicom_headers.SequenceName.lower().find(key.lower()) > -1):
+                    file_type = i
+                    
+    if file_type == ANATOMY:
+        try:
+            run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
+        except Exception, e:
+            raise('unable to parse run number from nifti file {}'.format(nifti_file))
+        
+        mprage = False
+        
+        for key in ['mprage', 't1w']:
+            if nifti_basename.lower().find(key) > 0:
+                mprage = True
+        
+        if nifti_basename.find('o') == 0 and mprage:
+            
+            highres_count = 0
+            if os.path.exists(os.path.join(base_directory, 'anatomy')):
+                highres_count = len([ item for item in os.listdir(os.path.join(base_directory, 'anatomy')) if 'highres' in item])
+                    
+            destination = os.path.join(base_directory, 'anatomy', 'highres{0:03d}'.format(highres_count + 1)) + nifti_extension
+            nipype.utils.filemanip.copyfile(
+                nifti_file, destination, copy=True)
+            
+        if nifti_basename.lower().find('PDT2'.lower()) > 0 and mprage:
+            inplane_count = 0
+            if os.path.exists(os.path.join(base_directory, 'anatomy')):
+                inplane_count = len([ item for item in os.listdir(os.path.join(base_directory, 'anatomy')) if 'inplane' in item])
+            
+            destination = os.path.join(base_directory, 'anatomy', 'inplane{0:03d}'.format(inplane_count + 1) + nifti_extension)
+            nipype.utils.filemanip.copyfile(
+                nifti_file, destination, copy=True)
+            nipype.utils.filemanip.copyfile(
+                nifti_file, os.path.join(base_directory, 'anatomy', 'other', nifti_basename), copy=True)
+            
+        elif not mprage:
+            destination = os.path.join(base_directory, 'anatomy', 'other', nifti_basename)
+            nipype.utils.filemanip.copyfile(
+                nifti_file, destination, copy=True)
+        
+    elif file_type == BOLD:
+        try:
+            run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
+            run_name = dicom_headers.ProtocolName.replace(' ','_')
+            run_directory = os.path.join(base_directory, 'bold','%s_%s'%(run_name,run_number))
+        except Exception, e: 
+            raise('unable to parse run number from nifti file {}'.format(nifti_file))
+        destination = os.path.join(base_directory, 'bold', run_directory, 'bold' + nifti_extension)
+        nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
+        
+    elif file_type == DTI:
+        
+        dti_count = 0
+        if os.path.exists(os.path.join(base_directory, 'dti')):
+            dti_count = int(len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'DTI' in item ]) / 3)
+        
+        destination = os.path.join(base_directory, 'dti', 'DTI_{0:03d}'.format(dti_count + 1) + nifti_extension)
+        nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
+    
+    elif file_type == FIELDMAP:
+        fieldmap_count = 0
+        if os.path.exists(os.path.join(base_directory, 'fieldmap')):
+            fieldmap_count = len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'fieldmap' in item ])
+    
+        if fieldmap_count == 0:
+            destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_mag' + nifti_extension)
+            nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
+        elif fieldmap_count == 1:
+            destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_phase' + nifti_extension)
+            nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
+
+    if destination == '' and (file_type == REFERENCE or file_type == LOCALIZER):
+        raise IOError('Failed to assign file {0} with filetype {1} to a directory'.format(nifti_file, file_type))
+    
+    return destination
+        
+    
 
 #@author Satrajit Ghosh
 def get_subjectinfo(subject_id, base_dir, task_id, model_id):
@@ -235,7 +343,7 @@ def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_i
     
     subject_info.inputs.base_dir = data_directory
 
-    
+    #setup the datasources
     datasource = nipype.pipeline.engine.Node(
                     nipype.interfaces.io.DataGrabber(infields=["subject_id", "run_id",
                                                                "task_id", "model_id"],
@@ -314,13 +422,27 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
                     nipype.interfaces.dcm2nii.Dcm2nii(terminal_output="file"),
                     name="nifticonvert"
     )
+    
+    #this is a function interface that grabs the dicom info for later
+    dicomheaders = nipype.pipeline.engine.Node(
+                        nipype.interfaces.utility.Function(input_names=["dicom"],
+                                                           output_names=["dicom_header"],
+                                                           function=get_dicom_headers),
+                                               name="dicomheaders")
+
+
+    openfmri_organization = nipype.pipeline.engine.Node(
+                                nipype.interfaces.utility.Function(input_names=["dicom_header","nifti_file","base_directory"],
+                                                                   output_names = ["destination"],
+                                                                   direct_nifti_to_directory),
+                                                        name="openfmri_organization")
+    openfmri_organization.inputs.base_directory = os.path.join(openfmri_subject_directory, subject_id)
 
     #just a test sink for now
     datasink = nipype.pipeline.engine.Node(
-                    nipype.interfaces.io.DataSink(base_directory=openfmri_subject_directory),
+                    nipype.interfaces.io.DataSink(base_directory=os.path.join(openfmri_subject_directory, subject_id)),
                     name="datasink")
-    datasink.base_dir = os.path.join(openfmri_subject_directory, subject_id)
-    datasink.base_directory = datasink.base_dir
+
     datasink.inputs.substitutions = [('_scan_id_', '')] 
     
     workflow = nipype.pipeline.engine.Workflow(name='dicom2nifti')
@@ -328,6 +450,9 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
     #lambda function that just runs pop() on any list you hand it
     pop_last = lambda x: x.pop()
     workflow.connect(datasource, ('dicoms', pop_last), converter, "source_names")
+    workflow.connect(datasource, ('dicoms', pop_last), dicomheaders, "dicom")
+    workflow.connect(dicomheaders, "dicom_header", openfmri_organization, "dicom_header")
+    workflow.connect(converter, "converted_files", openfmri_organization, "nifti_file")
     workflow.connect(converter, "converted_files", datasink, "niftis")
 
     workflow.base_dir = os.environ.get("SCRATCH", "/tmp")
