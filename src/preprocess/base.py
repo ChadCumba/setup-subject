@@ -55,7 +55,7 @@ REFERENCE = 5
 def name_it_bold(input):
     return 'bold'
 
-def get_dicom_headers(dicom_file, base_directory):
+def get_dicom_headers(dicom_file):
     import dicom
     import pickle
     from nipype import logging
@@ -72,10 +72,10 @@ def get_dicom_headers(dicom_file, base_directory):
     
     return dicom_file + '.pklz'
 
-def direct_nifti_to_directory(dicom_headers, nifti_file, base_directory):
+def direct_nifti_to_directory(dicom_header, niftis, base_directory):
     """Move nifti file to the correct directory for the subject
     @param dicom_headers: dicom_header object created by dicom.read_file and stored in a pickle dump
-    @param nifti_file: a nifti file to move
+    @param nifti_file: a list of nifti files to move
     @param subject_directory: string representing the main directory for the subject
 
     @return nifti_destination: string representing where the file moved to
@@ -86,10 +86,10 @@ def direct_nifti_to_directory(dicom_headers, nifti_file, base_directory):
     from nipype import logging
     iflogger = logging.getLogger('interface')
     
-    iflogger.debug('Enetering direct nifti with inputs {} {} {} '.format(dicom_headers, nifti_file, base_directory))
+    iflogger.debug('Enetering direct nifti with inputs {} {} {} '.format(dicom_header, niftis, base_directory))
     
-    with open(dicom_headers, 'r') as dicom_headers_handle:
-        dicom_headers = pickle.load(dicom_headers_handle)
+    with open(dicom_header, 'r') as dicom_headers_handle:
+        dicom_header = pickle.load(dicom_headers_handle)
     
     scan_keys = [['MPRAGE','FSE','T1w','T2w','PDT','PD-T2','tse2d','t2spc','t2_spc'],
         ['epfid'],
@@ -99,91 +99,93 @@ def direct_nifti_to_directory(dicom_headers, nifti_file, base_directory):
         ['SBRef']]
         
     file_type = None 
-    
-    nifti_basename = os.path.basename(nifti_file)
-    
-    nifti_extension = '.nii'
-    
-    if os.path.split(nifti_basename)[1] == '.gz':
-        nifti_extension = '.nii.gz'
-    
+
     destination = ''
     
     for i in range(0,6):
         for key in scan_keys[i]:
-            if (dicom_headers.ProtocolName.lower().find(key.lower()) > -1) or \
-                (dicom_headers.SeriesDescription.lower().find(key.lower()) > -1) or \
-                (dicom_headers.SequenceName.lower().find(key.lower()) > -1):
+            if (dicom_header.ProtocolName.lower().find(key.lower()) > -1) or \
+                (dicom_header.SeriesDescription.lower().find(key.lower()) > -1) or \
+                (dicom_header.SequenceName.lower().find(key.lower()) > -1):
                     file_type = i
-                    
-    if file_type == ANATOMY:
-        try:
-            run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
-        except Exception, e:
-            raise('unable to parse run number from nifti file {}'.format(nifti_file))
-        
-        mprage = False
-        
-        for key in ['mprage', 't1w']:
-            if nifti_basename.lower().find(key) > 0:
-                mprage = True
-        
-        if nifti_basename.find('o') == 0 and mprage:
-            
-            highres_count = 0
-            if os.path.exists(os.path.join(base_directory, 'anatomy')):
-                highres_count = len([ item for item in os.listdir(os.path.join(base_directory, 'anatomy')) if 'highres' in item])
-                    
-            destination = os.path.join(base_directory, 'anatomy', 'highres{0:03d}'.format(highres_count + 1)) + nifti_extension
-            nipype.utils.filemanip.copyfile(
-                nifti_file, destination, copy=True)
-            
-        if nifti_basename.lower().find('PDT2'.lower()) > 0 and mprage:
-            inplane_count = 0
-            if os.path.exists(os.path.join(base_directory, 'anatomy')):
-                inplane_count = len([ item for item in os.listdir(os.path.join(base_directory, 'anatomy')) if 'inplane' in item])
-            
-            destination = os.path.join(base_directory, 'anatomy', 'inplane{0:03d}'.format(inplane_count + 1) + nifti_extension)
-            nipype.utils.filemanip.copyfile(
-                nifti_file, destination, copy=True)
-            nipype.utils.filemanip.copyfile(
-                nifti_file, os.path.join(base_directory, 'anatomy', 'other', nifti_basename), copy=True)
-            
-        elif not mprage:
-            destination = os.path.join(base_directory, 'anatomy', 'other', nifti_basename)
-            nipype.utils.filemanip.copyfile(
-                nifti_file, destination, copy=True)
-        
-    elif file_type == BOLD:
-        try:
-            run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
-            run_name = dicom_headers.ProtocolName.replace(' ','_')
-            run_directory = os.path.join(base_directory, 'bold','%s_%s'%(run_name,run_number))
-        except Exception, e: 
-            raise('unable to parse run number from nifti file {}'.format(nifti_file))
-        destination = os.path.join(base_directory, 'bold', run_directory, 'bold' + nifti_extension)
-        nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
-        
-    elif file_type == DTI:
-        
-        dti_count = 0
-        if os.path.exists(os.path.join(base_directory, 'dti')):
-            dti_count = int(len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'DTI' in item ]) / 3)
-        
-        destination = os.path.join(base_directory, 'dti', 'DTI_{0:03d}'.format(dti_count + 1) + nifti_extension)
-        nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
     
-    elif file_type == FIELDMAP:
-        fieldmap_count = 0
-        if os.path.exists(os.path.join(base_directory, 'fieldmap')):
-            fieldmap_count = len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'fieldmap' in item ])
+    for nifti_file in niftis:
     
-        if fieldmap_count == 0:
-            destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_mag' + nifti_extension)
+        nifti_basename = os.path.basename(nifti_file)
+        
+        nifti_extension = '.nii'
+        
+        if os.path.split(nifti_basename)[1] == '.gz':
+            nifti_extension = '.nii.gz'                  
+            
+        if file_type == ANATOMY:
+            try:
+                run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
+            except Exception, e:
+                raise('unable to parse run number from nifti file {}'.format(nifti_file))
+            
+            mprage = False
+            
+            for key in ['mprage', 't1w']:
+                if nifti_basename.lower().find(key) > 0:
+                    mprage = True
+            
+            if nifti_basename.find('o') == 0 and mprage:
+                
+                highres_count = 0
+                if os.path.exists(os.path.join(base_directory, 'anatomy')):
+                    highres_count = len([ item for item in os.listdir(os.path.join(base_directory, 'anatomy')) if 'highres' in item])
+                        
+                destination = os.path.join(base_directory, 'anatomy', 'highres{0:03d}'.format(highres_count + 1)) + nifti_extension
+                nipype.utils.filemanip.copyfile(
+                    nifti_file, destination, copy=True)
+                
+            if nifti_basename.lower().find('PDT2'.lower()) > 0 and mprage:
+                inplane_count = 0
+                if os.path.exists(os.path.join(base_directory, 'anatomy')):
+                    inplane_count = len([ item for item in os.listdir(os.path.join(base_directory, 'anatomy')) if 'inplane' in item])
+                
+                destination = os.path.join(base_directory, 'anatomy', 'inplane{0:03d}'.format(inplane_count + 1) + nifti_extension)
+                nipype.utils.filemanip.copyfile(
+                    nifti_file, destination, copy=True)
+                nipype.utils.filemanip.copyfile(
+                    nifti_file, os.path.join(base_directory, 'anatomy', 'other', nifti_basename), copy=True)
+                
+            elif not mprage:
+                destination = os.path.join(base_directory, 'anatomy', 'other', nifti_basename)
+                nipype.utils.filemanip.copyfile(
+                    nifti_file, destination, copy=True)
+            
+        elif file_type == BOLD:
+            try:
+                run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
+                run_name = dicom_header.ProtocolName.replace(' ','_')
+                run_directory = os.path.join(base_directory, 'bold','%s_%s'%(run_name,run_number))
+            except Exception, e: 
+                raise('unable to parse run number from nifti file {}'.format(nifti_file))
+            destination = os.path.join(base_directory, 'bold', run_directory, 'bold' + nifti_extension)
             nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
-        elif fieldmap_count == 1:
-            destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_phase' + nifti_extension)
+            
+        elif file_type == DTI:
+            
+            dti_count = 0
+            if os.path.exists(os.path.join(base_directory, 'dti')):
+                dti_count = int(len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'DTI' in item ]) / 3)
+            
+            destination = os.path.join(base_directory, 'dti', 'DTI_{0:03d}'.format(dti_count + 1) + nifti_extension)
             nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
+        
+        elif file_type == FIELDMAP:
+            fieldmap_count = 0
+            if os.path.exists(os.path.join(base_directory, 'fieldmap')):
+                fieldmap_count = len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'fieldmap' in item ])
+        
+            if fieldmap_count == 0:
+                destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_mag' + nifti_extension)
+                nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
+            elif fieldmap_count == 1:
+                destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_phase' + nifti_extension)
+                nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
 
     if destination == '' and (file_type == REFERENCE or file_type == LOCALIZER):
         raise IOError('Failed to assign file {0} with filetype {1} to a directory'.format(nifti_file, file_type))
@@ -458,7 +460,7 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
 
 
     openfmri_organization = nipype.pipeline.engine.Node(
-                                nipype.interfaces.utility.Function(input_names=["dicom_header","nifti_file","base_directory"],
+                                nipype.interfaces.utility.Function(input_names=["dicom_header","niftis","base_directory"],
                                                                    output_names = ["destination"],
                                                                    function=direct_nifti_to_directory),
                                                         name="openfmri_organization")
@@ -478,7 +480,7 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
     workflow.connect(datasource, ('dicoms', pop_last), converter, "source_names")
     workflow.connect(datasource, ('dicoms', pop_last), dicomheaders, "dicom_file")
     workflow.connect(dicomheaders, "dicom_header", openfmri_organization, "dicom_header")
-    workflow.connect(converter, "converted_files", openfmri_organization, "nifti_file")
+    workflow.connect(converter, "converted_files", openfmri_organization, "niftis")
     workflow.connect(converter, "converted_files", datasink, "niftis")
 
     workflow.base_dir = os.environ.get("SCRATCH", "/tmp")
