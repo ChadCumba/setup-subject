@@ -29,6 +29,7 @@ import nipype.interfaces.io
 import nipype.interfaces.dcm2nii
 import nipype.utils.filemanip
 
+
 from nipype.interfaces.freesurfer.preprocess import ReconAll
 
 from optparse import OptionParser
@@ -55,7 +56,12 @@ def name_it_bold(input):
     return 'bold'
 
 def get_dicom_headers(dicom_file):
+    import dicom
+    from nipype import logging
+    iflogger = logging.getLogger('interface')
+    iflogger.debug('Getting headers from {}'.format(dicom_file))
     headers = dicom.read_file(dicom_file)
+    iflogger.debug('Returning headers from {}'.format(dicom_file))
     return headers
 
 def direct_nifti_to_directory(dicom_headers, nifti_file, base_directory):
@@ -67,6 +73,10 @@ def direct_nifti_to_directory(dicom_headers, nifti_file, base_directory):
     @return nifti_destination: string representing where the file moved to
 
     """
+    import dicom
+    from nipype import logging
+    iflogger = logging.getLogger('interface')
+    iflogger.debug('Enetering direct nifti with inputs {} {} {} '.format(dicom_headers, nifti_file, base_directory))
     scan_keys = [['MPRAGE','FSE','T1w','T2w','PDT','PD-T2','tse2d','t2spc','t2_spc'],
         ['epfid'],
         ['ep_b'],
@@ -163,6 +173,8 @@ def direct_nifti_to_directory(dicom_headers, nifti_file, base_directory):
 
     if destination == '' and (file_type == REFERENCE or file_type == LOCALIZER):
         raise IOError('Failed to assign file {0} with filetype {1} to a directory'.format(nifti_file, file_type))
+    else:
+        return nifti_file
     
     return destination
         
@@ -425,7 +437,7 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
     
     #this is a function interface that grabs the dicom info for later
     dicomheaders = nipype.pipeline.engine.Node(
-                        nipype.interfaces.utility.Function(input_names=["dicom"],
+                        nipype.interfaces.utility.Function(input_names=["dicom_file"],
                                                            output_names=["dicom_header"],
                                                            function=get_dicom_headers),
                                                name="dicomheaders")
@@ -434,7 +446,7 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
     openfmri_organization = nipype.pipeline.engine.Node(
                                 nipype.interfaces.utility.Function(input_names=["dicom_header","nifti_file","base_directory"],
                                                                    output_names = ["destination"],
-                                                                   direct_nifti_to_directory),
+                                                                   function=direct_nifti_to_directory),
                                                         name="openfmri_organization")
     openfmri_organization.inputs.base_directory = os.path.join(openfmri_subject_directory, subject_id)
 
@@ -450,7 +462,7 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
     #lambda function that just runs pop() on any list you hand it
     pop_last = lambda x: x.pop()
     workflow.connect(datasource, ('dicoms', pop_last), converter, "source_names")
-    workflow.connect(datasource, ('dicoms', pop_last), dicomheaders, "dicom")
+    workflow.connect(datasource, ('dicoms', pop_last), dicomheaders, "dicom_file")
     workflow.connect(dicomheaders, "dicom_header", openfmri_organization, "dicom_header")
     workflow.connect(converter, "converted_files", openfmri_organization, "nifti_file")
     workflow.connect(converter, "converted_files", datasink, "niftis")
