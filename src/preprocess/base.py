@@ -55,18 +55,26 @@ REFERENCE = 5
 def name_it_bold(input):
     return 'bold'
 
-def get_dicom_headers(dicom_file):
+def get_dicom_headers(dicom_file, base_directory):
     import dicom
+    import pickle
     from nipype import logging
     iflogger = logging.getLogger('interface')
     iflogger.debug('Getting headers from {}'.format(dicom_file))
     headers = dicom.read_file(dicom_file)
+    
+    
+    
     iflogger.debug('Returning headers from {}'.format(dicom_file))
-    return headers
+    
+    with open(dicom_file + '.pklz', 'w') as pickle_handle:
+        pickle.dump(headers, pickle_handle)
+    
+    return dicom_file + '.pklz'
 
 def direct_nifti_to_directory(dicom_headers, nifti_file, base_directory):
     """Move nifti file to the correct directory for the subject
-    @param dicom_headers: dicom_header object created by dicom.read_file
+    @param dicom_headers: dicom_header object created by dicom.read_file and stored in a pickle dump
     @param nifti_file: a nifti file to move
     @param subject_directory: string representing the main directory for the subject
 
@@ -74,9 +82,15 @@ def direct_nifti_to_directory(dicom_headers, nifti_file, base_directory):
 
     """
     import dicom
+    import pickle
     from nipype import logging
     iflogger = logging.getLogger('interface')
+    
     iflogger.debug('Enetering direct nifti with inputs {} {} {} '.format(dicom_headers, nifti_file, base_directory))
+    
+    with open(dicom_headers, 'r') as dicom_headers_handle:
+        dicom_headers = pickle.load(dicom_headers_handle)
+    
     scan_keys = [['MPRAGE','FSE','T1w','T2w','PDT','PD-T2','tse2d','t2spc','t2_spc'],
         ['epfid'],
         ['ep_b'],
