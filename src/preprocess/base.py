@@ -45,12 +45,7 @@ PROFILE = 0
 OUTPUT_DIR = '/work/01551/ccumba/output'
 XNAT_SERVER = "https://xnat.irc.utexas.edu/xnat-irc"
 
-ANATOMY = 0
-BOLD = 1
-DTI = 2
-FIELDMAP = 3
-LOCALIZER = 4
-REFERENCE = 5
+
 
 def name_it_bold(input):
     return 'bold'
@@ -86,7 +81,14 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
     import os
     
     import nipype.utils.filemanip
-        
+    
+    ANATOMY = 0
+    BOLD = 1
+    DTI = 2
+    FIELDMAP = 3
+    LOCALIZER = 4
+    REFERENCE = 5
+    
     from nipype import logging
     iflogger = logging.getLogger('interface')
     
