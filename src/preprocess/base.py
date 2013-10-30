@@ -333,7 +333,7 @@ def main(argv=None):
         print "Type your XNAT username and password below"
         if not os.path.exists(os.path.join(opts.data_directory, opts.subject, 'raw')):
                 os.makedirs(os.path.join(opts.data_directory, opts.subject, 'raw'))
-        #xnat_tools.down_subject_dicoms(XNAT_SERVER, os.path.join(opts.data_directory, opts.subject, 'raw'), opts.project, opts.subject)
+        xnat_tools.down_subject_dicoms(XNAT_SERVER, os.path.join(opts.data_directory, opts.subject, 'raw'), opts.project, opts.subject)
 
         openfmri_dicom_to_nifti(opts.data_directory, opts.subject )
         if DEBUG:
