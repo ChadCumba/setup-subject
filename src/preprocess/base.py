@@ -484,7 +484,7 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
     workflow = nipype.pipeline.engine.Workflow(name='dicom2nifti')
     workflow.connect(infosource, 'scan_id', datasource, 'scan_id')
     #lambda function that just runs pop() on any list you hand it
-    pop_last = lambda x: x.pop()
+    pop_last = lambda x: x.pop() if type(x) is list else x
     workflow.connect(datasource, ('dicoms', pop_last), converter, "source_names")
     workflow.connect(datasource, ('dicoms', pop_last), dicomheaders, "dicom_file")
     workflow.connect(dicomheaders, "dicom_header", openfmri_organization, "dicom_header")
