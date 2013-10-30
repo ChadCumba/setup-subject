@@ -102,6 +102,9 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
 
     destination = []
     
+    if type(niftis) is str:
+        niftis = [niftis]
+    
     try:
         for i in range(0,6):
             for key in scan_keys[i]:
