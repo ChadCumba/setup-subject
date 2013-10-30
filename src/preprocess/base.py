@@ -149,7 +149,8 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                 highres_count = 0
                 if os.path.exists(os.path.join(base_directory, 'anatomy')):
                     highres_count = len([ item for item in os.listdir(os.path.join(base_directory, 'anatomy')) if 'highres' in item])
-                        
+                else:
+                    os.makedirs(os.path.join(base_directory, 'anatomy'))
                 destination.append(os.path.join(base_directory, 'anatomy', 'highres{0:03d}'.format(highres_count + 1)) + nifti_extension)
                 nipype.utils.filemanip.copyfile(
                     nifti_file, destination[-1], copy=True)
@@ -158,7 +159,8 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                 inplane_count = 0
                 if os.path.exists(os.path.join(base_directory, 'anatomy')):
                     inplane_count = len([ item for item in os.listdir(os.path.join(base_directory, 'anatomy')) if 'inplane' in item])
-                
+                else:
+                    os.makedirs(os.path.exists(os.path.join(base_directory, 'anatomy', 'other')))
                 destination.append(os.path.join(base_directory, 'anatomy', 'inplane{0:03d}'.format(inplane_count + 1) + nifti_extension))
                 nipype.utils.filemanip.copyfile(
                     nifti_file, destination[-1], copy=True)
@@ -166,6 +168,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                     nifti_file, os.path.join(base_directory, 'anatomy', 'other', nifti_basename), copy=True)
                 
             elif not mprage:
+                os.makedirs(os.path.exists(os.path.join(base_directory, 'anatomy', 'other')))
                 destination.append(os.path.join(base_directory, 'anatomy', 'other', nifti_basename))
                 nipype.utils.filemanip.copyfile(
                     nifti_file, destination[-1], copy=True)
@@ -175,8 +178,13 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                 run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
                 run_name = dicom_header.ProtocolName.replace(' ','_')
                 run_directory = os.path.join(base_directory, 'bold','%s_%s'%(run_name,run_number))
+                
+                if not os.path.exists(os.path.join(base_directory, 'bold','%s_%s'%(run_name,run_number))):
+                    os.makedirs(os.path.join(base_directory, 'bold','%s_%s'%(run_name,run_number)))
+                
             except Exception, e: 
                 raise('unable to parse run number from nifti file {}'.format(nifti_file))
+            
             destination.append(os.path.join(base_directory, 'bold', run_directory, 'bold' + nifti_extension))
             nipype.utils.filemanip.copyfile(nifti_file, destination[-1], copy=True)
             
@@ -185,6 +193,8 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
             dti_count = 0
             if os.path.exists(os.path.join(base_directory, 'dti')):
                 dti_count = int(len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'DTI' in item ]) / 3)
+            else:
+                os.path.exists(os.path.join(base_directory, 'dti'))
             
             destination.append(os.path.join(base_directory, 'dti', 'DTI_{0:03d}'.format(dti_count + 1) + nifti_extension))
             nipype.utils.filemanip.copyfile(nifti_file, destination[-1], copy=True)
@@ -193,6 +203,8 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
             fieldmap_count = 0
             if os.path.exists(os.path.join(base_directory, 'fieldmap')):
                 fieldmap_count = len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'fieldmap' in item ])
+            else:
+                os.path.exists(os.path.join(base_directory, 'fieldmap'))
         
             if fieldmap_count == 0:
                 destination.append(os.path.join(base_directory, 'fieldmap', 'fieldmap_mag' + nifti_extension))
