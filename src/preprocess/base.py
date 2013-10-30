@@ -83,6 +83,10 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
     """
     import dicom
     import pickle
+    import os
+    
+    import nipype.utils.filemanip
+        
     from nipype import logging
     iflogger = logging.getLogger('interface')
     
