@@ -160,7 +160,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                 if os.path.exists(os.path.join(base_directory, 'anatomy')):
                     inplane_count = len([ item for item in os.listdir(os.path.join(base_directory, 'anatomy')) if 'inplane' in item])
                 else:
-                    os.makedirs(os.path.exists(os.path.join(base_directory, 'anatomy', 'other')))
+                    os.makedirs(os.path.join(base_directory, 'anatomy', 'other'))
                 destination.append(os.path.join(base_directory, 'anatomy', 'inplane{0:03d}'.format(inplane_count + 1) + nifti_extension))
                 nipype.utils.filemanip.copyfile(
                     nifti_file, destination[-1], copy=True)
@@ -168,7 +168,8 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                     nifti_file, os.path.join(base_directory, 'anatomy', 'other', nifti_basename), copy=True)
                 
             elif not mprage:
-                os.makedirs(os.path.exists(os.path.join(base_directory, 'anatomy', 'other')))
+                if not os.path.exists(os.path.join(base_directory, 'anatomy', 'other')):
+                    os.makedirs(os.path.join(base_directory, 'anatomy', 'other'))
                 destination.append(os.path.join(base_directory, 'anatomy', 'other', nifti_basename))
                 nipype.utils.filemanip.copyfile(
                     nifti_file, destination[-1], copy=True)
@@ -194,7 +195,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
             if os.path.exists(os.path.join(base_directory, 'dti')):
                 dti_count = int(len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'DTI' in item ]) / 3)
             else:
-                os.path.exists(os.path.join(base_directory, 'dti'))
+                os.makedirs(os.path.join(base_directory, 'dti'))
             
             destination.append(os.path.join(base_directory, 'dti', 'DTI_{0:03d}'.format(dti_count + 1) + nifti_extension))
             nipype.utils.filemanip.copyfile(nifti_file, destination[-1], copy=True)
@@ -204,7 +205,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
             if os.path.exists(os.path.join(base_directory, 'fieldmap')):
                 fieldmap_count = len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'fieldmap' in item ])
             else:
-                os.path.exists(os.path.join(base_directory, 'fieldmap'))
+                os.makedirs(os.path.join(base_directory, 'fieldmap'))
         
             if fieldmap_count == 0:
                 destination.append(os.path.join(base_directory, 'fieldmap', 'fieldmap_mag' + nifti_extension))
