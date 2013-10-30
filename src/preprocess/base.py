@@ -201,7 +201,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                 destination.append(os.path.join(base_directory, 'fieldmap', 'fieldmap_phase' + nifti_extension))
                 nipype.utils.filemanip.copyfile(nifti_file, destination[-1], copy=True)
 
-    if destination == [] and (file_type == REFERENCE or file_type == LOCALIZER):
+    if destination == [] and not (file_type == REFERENCE or file_type == LOCALIZER):
         raise IOError('Failed to assign file {0} with filetype {1} to a directory'.format(niftis, file_type))
     else:
         return niftis
