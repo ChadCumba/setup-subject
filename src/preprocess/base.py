@@ -155,7 +155,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                 nipype.utils.filemanip.copyfile(
                     nifti_file, destination[-1], copy=True)
                 
-            if nifti_basename.lower().find('PDT2'.lower()) > 0 and mprage:
+            if nifti_basename.lower().find('PDT2'.lower()) > 0 and not mprage:
                 inplane_count = 0
                 if os.path.exists(os.path.join(base_directory, 'anatomy')):
                     inplane_count = len([ item for item in os.listdir(os.path.join(base_directory, 'anatomy')) if 'inplane' in item])
@@ -167,7 +167,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                 nipype.utils.filemanip.copyfile(
                     nifti_file, os.path.join(base_directory, 'anatomy', 'other', nifti_basename), copy=True)
                 
-            elif not mprage:
+            else:
                 if not os.path.exists(os.path.join(base_directory, 'anatomy', 'other')):
                     os.makedirs(os.path.join(base_directory, 'anatomy', 'other'))
                 destination.append(os.path.join(base_directory, 'anatomy', 'other', nifti_basename))
