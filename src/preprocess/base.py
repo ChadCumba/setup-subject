@@ -27,6 +27,7 @@ import nipype.pipeline.engine
 import nipype.interfaces.utility
 import nipype.interfaces.io
 import nipype.interfaces.dcm2nii
+import nipype.interfaces.fsl.preprocess
 import nipype.utils.filemanip
 
 
@@ -49,6 +50,12 @@ XNAT_SERVER = "https://xnat.irc.utexas.edu/xnat-irc"
 
 def name_it_bold(input):
     return 'bold'
+    
+def pop_last_get_dir(list_of_paths):
+    import os
+    if type(list_of_paths) is list:
+        return os.path.split(list_of_paths.pop())[0]
+    return os.path.split(list_of_paths)[0]
 
 def get_dicom_headers(dicom_file):
     import dicom
@@ -123,15 +130,19 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                          + "Check your dicom headers")
         return []
     
+    iflogger.debug('Direct nifti passed attribute checks')
+    
     for nifti_file in niftis:
     
+        iflogger.debug('classifying nifti_file {} from niftis {}'.format(nifti_file, niftis))
         nifti_basename = os.path.basename(nifti_file)
         
         nifti_extension = '.nii'
         
         if os.path.split(nifti_basename)[1] == '.gz':
             nifti_extension = '.nii.gz'                  
-            
+        iflogger.debug('Passed filesplit on {}, file type is {}'.format(nifti_basename, file_type))
+        
         if file_type == ANATOMY:
             try:
                 run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
@@ -191,10 +202,14 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
             
         elif file_type == DTI:
             
+            iflogger.debug('File type of {} is dti'.format(nifti_file))
+            
             dti_count = 0
             if os.path.exists(os.path.join(base_directory, 'dti')):
+                iflogger.debug('dit path {} exists, skipping creation'.format(os.path.join(base_directory, 'dti')))
                 dti_count = int(len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'DTI' in item ]) / 3)
             else:
+                iflogger.debug('Creating dti directory {}'.format(os.path.join(base_directory, 'dti')))
                 os.makedirs(os.path.join(base_directory, 'dti'))
             
             destination.append(os.path.join(base_directory, 'dti', 'DTI_{0:03d}'.format(dti_count + 1) + nifti_extension))
@@ -203,7 +218,8 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
         elif file_type == FIELDMAP:
             fieldmap_count = 0
             if os.path.exists(os.path.join(base_directory, 'fieldmap')):
-                fieldmap_count = len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'fieldmap' in item ])
+                fieldmap_count = len([ item for item in os.listdir(os.path.join(base_directory, 'fieldmap')) if 'fieldmap' in item ])
+                iflogger.debug('fieldmap count is {}'.format(fieldmap_count))
             else:
                 os.makedirs(os.path.join(base_directory, 'fieldmap'))
         
@@ -212,6 +228,9 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                 nipype.utils.filemanip.copyfile(nifti_file, destination[-1], copy=True)
             elif fieldmap_count == 1:
                 destination.append(os.path.join(base_directory, 'fieldmap', 'fieldmap_phase' + nifti_extension))
+                nipype.utils.filemanip.copyfile(nifti_file, destination[-1], copy=True)
+            else:
+                destination.append(os.path.join(base_directory, 'fieldmap', 'fieldmap_{0:03d}'.format(fieldmap_count + 1) + nifti_extension))
                 nipype.utils.filemanip.copyfile(nifti_file, destination[-1], copy=True)
 
     if destination == [] and not (file_type == REFERENCE or file_type == LOCALIZER):
@@ -312,13 +331,17 @@ def main(argv=None):
         parser.add_option("-g", "--getdata", dest="get_data", help="get data from XNAT [default: %default]", action="store_true")
         parser.add_option("-p", "--project", dest="project", help="set the XNAT project name [default: %default]", 
                           metavar="XNAT PROJECT")
+        parser.add_option("--dcm2nii", dest="dicom_to_nifti", help="convert dicom files to nifti format", action="store_true")
+        parser.add_option("--motcorr", dest="motion_correction", help="run bet motion correction", action="store_true")
+        parser.add_option("--melodic", dest="melodic", help="run melodic on func data", action="store_true")
+        parser.add_option("--betfunc", dest="skull_strip", help="run BET on func data", action="store_true")
          
         # set defaults
-        parser.set_defaults(outfile="./out.txt", infile="./in.txt", work_directory="./work", task_id=1,
-                            model_id=1, subject="all", get_data=False, data_directory=".", project=None)
+        parser.set_defaults(outfile="./out.txt", infile="./in.txt", work_directory=os.environ.get('SCRATCH'), task_id=1,
+                            model_id=1, subject="all", get_data=False, data_directory='.', project=None, motion_correction=False,
+                            melodic=False, skull_strip=False)
         # process options
         (opts, args) = parser.parse_args(argv)
-        print "wat"
         if opts.verbose > 0:
             print("verbosity level = %d" % opts.verbose)
         if opts.infile:
@@ -327,12 +350,12 @@ def main(argv=None):
             print("outfile = %s" % opts.outfile)
         if opts.subject == "all":
             opts.subject = None
-
         if opts.get_data:
             if opts.project is None:
                 raise IOError('Must specify --project when using --getdata')
-            if opts.subject == "all":
+            if opts.subject == "all" or opts.subject is None:
                 raise IOError('Must specify --subject when using --getdata, and --subject cannot be "all"')
+        opts.data_directory = os.path.abspath(opts.data_directory)
         
         # MAIN BODY #
     except Exception, e:
@@ -354,15 +377,20 @@ def main(argv=None):
                 os.makedirs(os.path.join(opts.data_directory, opts.subject, 'raw'))
         xnat_tools.down_subject_dicoms(XNAT_SERVER, os.path.join(opts.data_directory, opts.subject, 'raw'), opts.project, opts.subject)
 
-        openfmri_dicom_to_nifti(opts.data_directory, opts.subject )
-        if DEBUG:
-            sys.exit(0)
-
+    if opts.dicom_to_nifti:
+        if opts.subject == "all":
+            [openfmri_dicom_to_nifti(opts.data_directory, subject) for subject in os.listdir(opts.data_directory)]
+        else:
+            openfmri_dicom_to_nifti(opts.data_directory, opts.subject)
+        
     analyze_openfmri_dataset(opts.data_directory, subject=opts.subject, model_id=opts.model_id, task_id=opts.task_id,
-                             work_directory=opts.work_directory, xnat_datasource=opts.get_data)
+                             work_directory=opts.work_directory, xnat_datasource=opts.get_data,
+                             run_motion_correction=opts.motion_correction, run_skull_strip=opts.skull_strip, 
+                             run_melodic=opts.melodic)
 
 
-def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_id=None, work_directory=None, xnat_datasource=False):
+def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_id=None, work_directory=None, xnat_datasource=False,
+                             run_motion_correction=False, run_skull_strip=False, run_melodic=False):
     """
     @TODO - docs
     
@@ -432,17 +460,45 @@ def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_i
     workflow.connect(infosource, "task_id", datasource, "task_id")    
     workflow.connect(subject_info, 'run_id', datasource, 'run_id')
     
+    #FSL mcflirt motion correction
+    motion_correction = nipype.pipeline.engine.Node(
+                            interface=nipype.interfaces.fsl.preprocess.MCFLIRT(),
+                            name="motion_correction")
+    motion_correction.inputs.terminal_output = "file"
+    workflow.connect(datasource, "bold", motion_correction, "in_file")
+    
+    #betfunc skull stripping
+    skull_strip = nipype.pipeline.engine.Node(
+                    interface=nipype.interfaces.fsl.BET(),
+                    name="skull_strip")
+    workflow.connect(motion_correction, "out_file", skull_strip, "in_file")
+    skull_strip.inputs.terminal_output = 'file'
+    
+    #melodic analysis
+    independent_components_analysis = nipype.pipeline.engine.Node(
+                                        interface=nipype.interfaces.fsl.model.MELODIC(),
+                                        name="melodic")
+    workflow.connect(motion_correction,"out_file", independent_components_analysis, "in_files")
+    independent_components_analysis.inputs.terminal_output = "file"
+    
+    #freesurfer autorecon all
     cortical_reconstruction = nipype.pipeline.engine.Node(
                                 interface=ReconAll(),
                                 name="cortical_reconstruction")
     
     workflow.connect(datasource, "anat", cortical_reconstruction, "T1_files" )
     
+    
+    #Data storage and sink
     datasink = nipype.pipeline.engine.Node(nipype.interfaces.io.DataSink(), name="datasink")
     datasink.inputs.base_directory = OUTPUT_DIR
     
     workflow.connect(cortical_reconstruction, 'subject_id', datasink, 'container')
     workflow.connect(cortical_reconstruction, 'T1', datasink, 'highres')
+    workflow.connect(motion_correction, "out_file", datasink, 'bold_mcf')
+    workflow.connect(skull_strip, "out_file", datasink, "bold_mcf_brain")
+    workflow.connect(independent_components_analysis, "out_dir", datasink, "melodic")
+    workflow.connect(independent_components_analysis, "report_dir", datasink, "melodic_report")
     
     
     workflow.run(plugin="SGE", plugin_args={"qsub_args":("-l h_rt=3:00:00 -q normal -A Analysis_Lonestar " 
