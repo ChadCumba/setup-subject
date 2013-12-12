@@ -186,6 +186,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                     nifti_file, destination[-1], copy=True)
             
         elif file_type == BOLD:
+            iflogger.debug("File {} is of type BOLD".format(nifti_file))
             try:
                 run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
                 run_name = dicom_header.ProtocolName.replace(' ','_')
@@ -198,6 +199,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                 raise('unable to parse run number from nifti file {}'.format(nifti_file))
             
             destination.append(os.path.join(base_directory, 'bold', run_directory, 'bold' + nifti_extension))
+            iflogger.debug("Sending file {} to destination {}".format(nifti_file, destination))
             nipype.utils.filemanip.copyfile(nifti_file, destination[-1], copy=True)
             
         elif file_type == DTI:
@@ -335,11 +337,12 @@ def main(argv=None):
         parser.add_option("--motcorr", dest="motion_correction", help="run bet motion correction", action="store_true")
         parser.add_option("--melodic", dest="melodic", help="run melodic on func data", action="store_true")
         parser.add_option("--betfunc", dest="skull_strip", help="run BET on func data", action="store_true")
+        parser.add_option("--fsrecon", dest="autorecon_all", help="run freesurfer autorecon1", action="store_true")
          
         # set defaults
         parser.set_defaults(outfile="./out.txt", infile="./in.txt", work_directory=os.environ.get('SCRATCH'), task_id=1,
                             model_id=1, subject="all", get_data=False, data_directory='.', project=None, motion_correction=False,
-                            melodic=False, skull_strip=False)
+                            melodic=False, skull_strip=False, autorecon_all=False)
         # process options
         (opts, args) = parser.parse_args(argv)
         if opts.verbose > 0:
@@ -382,15 +385,14 @@ def main(argv=None):
             [openfmri_dicom_to_nifti(opts.data_directory, subject) for subject in os.listdir(opts.data_directory)]
         else:
             openfmri_dicom_to_nifti(opts.data_directory, opts.subject)
-        
-    analyze_openfmri_dataset(opts.data_directory, subject=opts.subject, model_id=opts.model_id, task_id=opts.task_id,
-                             work_directory=opts.work_directory, xnat_datasource=opts.get_data,
-                             run_motion_correction=opts.motion_correction, run_skull_strip=opts.skull_strip, 
-                             run_melodic=opts.melodic)
+    if any([opts.autorecon_all, opts.melodic, opts.motion_correction, opts.skull_strip]):
+        preprocess_dataset(opts.data_directory, subject=opts.subject, model_id=opts.model_id, task_id=opts.task_id,
+                                 work_directory=opts.work_directory, xnat_datasource=opts.get_data,
+                                 run_motion_correction=opts.motion_correction, run_skull_strip=opts.skull_strip, 
+                                 run_melodic=opts.melodic, run_autorecon=opts.autorecon_all)
 
-
-def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_id=None, work_directory=None, xnat_datasource=False,
-                             run_motion_correction=False, run_skull_strip=False, run_melodic=False):
+def preprocess_dataset(data_directory, subject=None, model_id=None, task_id=None,  work_directory=None, xnat_datasource=False,
+                             run_motion_correction=False, run_skull_strip=False, run_melodic=False, run_autorecon=False):
     """
     @TODO - docs
     
@@ -398,6 +400,110 @@ def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_i
     @param subject - directory within data_directory containing a single subjects data
     @param model_id - the model number to run
     @param task_id - the task to run
+    
+    @param work_directory - directory to store transitional files
+    """
+    subjects = [path.split(os.path.sep)[-1] for path in glob.glob(os.path.join(data_directory, '*'))]
+    
+    bolddirs_by_subject = {}
+    for item in subjects:
+        bolddirs_by_subject[item] = [path.split(os.path.sep)[-1] for path in glob.glob(os.path.join(data_directory, item, 'bold', '*'))]
+    
+    
+    infosource = nipype.pipeline.engine.Node(
+                    nipype.interfaces.utility.IdentityInterface(fields=["subject_id", "bold_dirs"]),
+                                                                name="infosource")
+    
+    if subject is None:
+        infosource.iterables = [("subject_id", subjects)]
+    else:
+        infosource.iterables = [("subject_id", [subjects[subjects.index(subject)]]),
+                                ("bold_dirs", bolddirs_by_subject[subject])]
+    
+ 
+    #setup the datasources
+    datasource = nipype.pipeline.engine.Node(
+                    nipype.interfaces.io.DataGrabber(infields=["subject_id", "bold_dirs"],
+                                                     outfields=["anat", "bold"]),
+                                             name="datasource")
+    
+    datasource.inputs.base_directory = data_directory
+    datasource.inputs.template = "*"
+    datasource.inputs.field_template = {
+                                        "bold" : "%s/bold/%s/bold.nii*"
+                                        }
+    datasource.inputs.template_args = {
+                                       "bold" : [["subject_id", "bold_dirs"]]
+                                       }
+    datasource.inputs.sort_filelist = True
+    
+    workflow = nipype.pipeline.engine.Workflow(name="openfmri")
+    
+    if work_directory is None:
+        work_directory = os.path.join(os.getcwd(),'working')
+        
+    workflow.base_dir = work_directory
+    
+    workflow.connect(infosource, "subject_id", datasource, "subject_id")
+    workflow.connect(infosource, "bold_dirs", datasource, "bold_dirs")
+
+    #Data storage and sink
+    datasink = nipype.pipeline.engine.Node(nipype.interfaces.io.DataSink(), name="datasink")
+    datasink.inputs.base_directory = OUTPUT_DIR
+    
+    #FSL mcflirt motion correction
+    if any([run_motion_correction, run_skull_strip, run_melodic]):
+        motion_correction = nipype.pipeline.engine.Node(
+                                interface=nipype.interfaces.fsl.preprocess.MCFLIRT(),
+                                name="motion_correction")
+        motion_correction.inputs.terminal_output = "file"
+        workflow.connect(datasource, "bold", motion_correction, "in_file")
+        workflow.connect(motion_correction, "out_file", datasink, 'bold_mcf')
+
+    
+    #betfunc skull stripping
+    if run_skull_strip:
+        skull_strip = nipype.pipeline.engine.Node(
+                        interface=nipype.interfaces.fsl.BET(),
+                        name="skull_strip")
+        workflow.connect(motion_correction, "out_file", skull_strip, "in_file")
+        skull_strip.inputs.terminal_output = 'file'
+        workflow.connect(skull_strip, "out_file", datasink, "bold_mcf_brain")
+        
+    #melodic analysis
+    if run_melodic:
+        independent_components_analysis = nipype.pipeline.engine.Node(
+                                            interface=nipype.interfaces.fsl.model.MELODIC(),
+                                            name="melodic")
+        workflow.connect(motion_correction,"out_file", independent_components_analysis, "in_files")
+        independent_components_analysis.inputs.terminal_output = "file"
+        workflow.connect(independent_components_analysis, "out_dir", datasink, "melodic")
+        workflow.connect(independent_components_analysis, "report_dir", datasink, "melodic_report")
+    
+    #freesurfer autorecon all
+    if run_autorecon:
+        cortical_reconstruction = nipype.pipeline.engine.Node(
+                                    interface=ReconAll(),
+                                    name="cortical_reconstruction")
+        
+        workflow.connect(datasource, "anat", cortical_reconstruction, "T1_files" )
+        workflow.connect(cortical_reconstruction, 'subject_id', datasink, 'container')
+        workflow.connect(cortical_reconstruction, 'T1', datasink, 'highres')
+    
+    
+    workflow.run(plugin="SGE", plugin_args={"qsub_args":("-l h_rt=3:00:00 -q normal -A Analysis_Lonestar " 
+                                            "-pe 12way 24 -M chad.cumba@mail.utexas.edu")})
+
+def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_id=None,  work_directory=None, xnat_datasource=False,
+                             run_motion_correction=False, run_skull_strip=False, run_melodic=False, run_autorecon=False):
+    """
+    @TODO - docs
+    
+    @param data_directory - directory containing subject folders
+    @param subject - directory within data_directory containing a single subjects data
+    @param model_id - the model number to run
+    @param task_id - the task to run
+    
     @param work_directory - directory to store transitional files
     """
     subjects = [path.split(os.path.sep)[-1] for path in glob.glob(os.path.join(data_directory, '*'))]
@@ -414,7 +520,7 @@ def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_i
     else:
         infosource.iterables = [("subject_id", [subjects[subjects.index(subject)]]),
                                 ("model_id", [model_id]),
-                                ("task_id", [task_id])
+                                ("task_id", [task_id]),
                                 ]
     
     subject_info = nipype.pipeline.engine.Node(
@@ -436,11 +542,11 @@ def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_i
     datasource.inputs.base_directory = data_directory
     datasource.inputs.template = "*"
     datasource.inputs.field_template = {"anat" : "%s/anatomy/highres001.nii.gz",
-                                        "bold" : "%s/BOLD/task%03d_r*/bold.nii.gz",
+                                        "bold" : "%s/BOLD/task%03d_run%03d/bold.nii.gz",
                                         "behav" : "%s/model/model%03d/onsets/task%03d_run%03d/cond*.txt"
                                         }
     datasource.inputs.template_args = {"anat" : [["subject_id"]],
-                                       "bold" : [["subject_id", "task_id"]],
+                                       "bold" : [["subject_id", "task_id", "run_id"]],
                                        "behav" : [["subject_id", "model_id", "task_id", "run_id"]]
                                        }
     datasource.inputs.sort_filelist = True
@@ -459,46 +565,52 @@ def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_i
     workflow.connect(infosource, "model_id", datasource, "model_id")
     workflow.connect(infosource, "task_id", datasource, "task_id")    
     workflow.connect(subject_info, 'run_id', datasource, 'run_id')
-    
-    #FSL mcflirt motion correction
-    motion_correction = nipype.pipeline.engine.Node(
-                            interface=nipype.interfaces.fsl.preprocess.MCFLIRT(),
-                            name="motion_correction")
-    motion_correction.inputs.terminal_output = "file"
-    workflow.connect(datasource, "bold", motion_correction, "in_file")
-    
-    #betfunc skull stripping
-    skull_strip = nipype.pipeline.engine.Node(
-                    interface=nipype.interfaces.fsl.BET(),
-                    name="skull_strip")
-    workflow.connect(motion_correction, "out_file", skull_strip, "in_file")
-    skull_strip.inputs.terminal_output = 'file'
-    
-    #melodic analysis
-    independent_components_analysis = nipype.pipeline.engine.Node(
-                                        interface=nipype.interfaces.fsl.model.MELODIC(),
-                                        name="melodic")
-    workflow.connect(motion_correction,"out_file", independent_components_analysis, "in_files")
-    independent_components_analysis.inputs.terminal_output = "file"
-    
-    #freesurfer autorecon all
-    cortical_reconstruction = nipype.pipeline.engine.Node(
-                                interface=ReconAll(),
-                                name="cortical_reconstruction")
-    
-    workflow.connect(datasource, "anat", cortical_reconstruction, "T1_files" )
-    
-    
     #Data storage and sink
     datasink = nipype.pipeline.engine.Node(nipype.interfaces.io.DataSink(), name="datasink")
     datasink.inputs.base_directory = OUTPUT_DIR
     
-    workflow.connect(cortical_reconstruction, 'subject_id', datasink, 'container')
-    workflow.connect(cortical_reconstruction, 'T1', datasink, 'highres')
-    workflow.connect(motion_correction, "out_file", datasink, 'bold_mcf')
-    workflow.connect(skull_strip, "out_file", datasink, "bold_mcf_brain")
-    workflow.connect(independent_components_analysis, "out_dir", datasink, "melodic")
-    workflow.connect(independent_components_analysis, "report_dir", datasink, "melodic_report")
+    #FSL mcflirt motion correction
+    if any([run_motion_correction, run_skull_strip, run_melodic]):
+        motion_correction = nipype.pipeline.engine.Node(
+                                interface=nipype.interfaces.fsl.preprocess.MCFLIRT(),
+                                name="motion_correction")
+        motion_correction.inputs.terminal_output = "file"
+        workflow.connect(datasource, "bold", motion_correction, "in_file")
+        workflow.connect(motion_correction, "out_file", datasink, 'bold_mcf')
+
+    
+    #betfunc skull stripping
+    if run_skull_strip:
+        skull_strip = nipype.pipeline.engine.Node(
+                        interface=nipype.interfaces.fsl.BET(),
+                        name="skull_strip")
+        workflow.connect(motion_correction, "out_file", skull_strip, "in_file")
+        skull_strip.inputs.terminal_output = 'file'
+        workflow.connect(skull_strip, "out_file", datasink, "bold_mcf_brain")
+        
+    #melodic analysis
+    if run_melodic:
+        independent_components_analysis = nipype.pipeline.engine.Node(
+                                            interface=nipype.interfaces.fsl.model.MELODIC(),
+                                            name="melodic")
+        workflow.connect(motion_correction,"out_file", independent_components_analysis, "in_files")
+        independent_components_analysis.inputs.terminal_output = "file"
+        workflow.connect(independent_components_analysis, "out_dir", datasink, "melodic")
+        workflow.connect(independent_components_analysis, "report_dir", datasink, "melodic_report")
+    
+    #freesurfer autorecon all
+    if run_autorecon:
+        cortical_reconstruction = nipype.pipeline.engine.Node(
+                                    interface=ReconAll(),
+                                    name="cortical_reconstruction")
+        
+        workflow.connect(datasource, "anat", cortical_reconstruction, "T1_files" )
+        workflow.connect(cortical_reconstruction, 'subject_id', datasink, 'container')
+        workflow.connect(cortical_reconstruction, 'T1', datasink, 'highres')
+    
+
+    
+    
     
     
     workflow.run(plugin="SGE", plugin_args={"qsub_args":("-l h_rt=3:00:00 -q normal -A Analysis_Lonestar " 
