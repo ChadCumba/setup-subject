@@ -387,6 +387,7 @@ def main(argv=None):
             [openfmri_dicom_to_nifti(opts.data_directory, subject) for subject in os.listdir(opts.data_directory)]
         else:
             openfmri_dicom_to_nifti(opts.data_directory, opts.subject)
+
     if any([opts.autorecon_all, opts.melodic, opts.motion_correction, opts.skull_strip, opts.dti_qa]):
         preprocess_dataset(opts.data_directory, subject=opts.subject, model_id=opts.model_id, task_id=opts.task_id,
                                  work_directory=opts.work_directory, xnat_datasource=opts.get_data,
@@ -428,7 +429,7 @@ def preprocess_dataset(data_directory, subject=None, model_id=None, task_id=None
     iflogger.debug('prepping infosource')
     infosource = nipype.pipeline.engine.Node(
                     nipype.interfaces.utility.IdentityInterface(fields=["subject_id", "bold_dirs", "dti_runs"]),
-                                                                name="infosource")
+                    name="infosource")
     
     if subject is None:
         infosource.iterables = [("subject_id", subjects)]
