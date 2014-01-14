@@ -26,7 +26,8 @@ XNAT_SERVER = "https://xnat.irc.utexas.edu/xnat-irc"
 
 import sys
 if DEBUG:
-    sys.path.insert(0, "/home1/01551/ccumba/python_packages/nipype")
+    sys.path.insert(0, "/work/01551/ccumba/python_packages/nipype")
+    sys.path.insert(0, "/work/01551/ccumba/setup_subject/src")
 import os
 import glob
 import xnat_tools
@@ -37,6 +38,7 @@ import nipype.interfaces.utility
 import nipype.interfaces.io
 import nipype.interfaces.dcm2nii
 import nipype.interfaces.fsl.preprocess
+import nipype.interfaces.freesurfer.preprocess
 import nipype.utils.filemanip
 import nipype.interfaces.fsl.epi
 
@@ -63,7 +65,7 @@ def name_it_bold(input):
 def pop_last_get_dir(list_of_paths):
     import os
     if type(list_of_paths) is list:
-        return os.path.split(list_of_paths.pop())[0]
+        return os.path.split(list_of_paths[0])[0]
     return os.path.split(list_of_paths)[0]
 
 def get_TR(dicom_header):
@@ -414,8 +416,6 @@ def main(argv=None):
         else:
             workflow = openfmri_dicom_to_nifti(opts.data_directory, opts.subject)
             workflow.run()
-
-
     if any([opts.autorecon_all, opts.melodic, opts.motion_correction, opts.skull_strip, opts.dti_qa, opts.fmri_qa, opts.process_fieldmap]):
         workflow = preprocess_dataset(opts.data_directory, subject=opts.subject, model_id=opts.model_id, task_id=opts.task_id,
                                  work_directory=opts.work_directory, xnat_datasource=opts.get_data,
@@ -780,11 +780,12 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
                                                      outfields=["dicoms"]),
                                              name="datasource")
     datasource.inputs.base_directory = scans_container
-    datasource.inputs.template = "*"
+    datasource.inputs.template = "*dcm"
     datasource.inputs.field_template = {'dicoms' : '%s/*dcm'}
     datasource.inputs.template_args = {'dicoms' : [['scan_id']]}
     datasource.inputs.sorted = False
     datasource.inputs.sort_filelist = False
+    datasource.inputs.ignore_exception = True
 
     
     #build the nifti converter
@@ -792,6 +793,12 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
                     nipype.interfaces.dcm2nii.Dcm2nii(terminal_output="file"),
                     name="nifticonvert"
     )
+
+    #force 4d volumes and no dates in filenames
+    converter.inputs.args = '-4 y -d n'
+    converter.inputs.nii_output = True
+    #ignore exceptions on bad inputs to prevent a full crash from one bad scan
+    converter.inputs.ignore_exception = True
     
     #this is a function interface that grabs the dicom info for later
     dicomheaders = nipype.pipeline.engine.Node(
@@ -814,16 +821,18 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
                     name="datasink")
 
     datasink.inputs.substitutions = [('_scan_id_', '')] 
+    datasink.inputs.ignore_exception = True
     
     workflow = nipype.pipeline.engine.Workflow(name='dicom2nifti')
     workflow.connect(infosource, 'scan_id', datasource, 'scan_id')
     #lambda function that just runs pop() on any list you hand it
-    pop_last = lambda x: x.pop() if type(x) is list else x
-    workflow.connect(datasource, ('dicoms', pop_last), converter, "source_names")
-    workflow.connect(datasource, ('dicoms', pop_last), dicomheaders, "dicom_file")
-    workflow.connect(dicomheaders, "dicom_header", openfmri_organization, "dicom_header")
-    workflow.connect(converter, "converted_files", openfmri_organization, "niftis")
-    workflow.connect(converter, "converted_files", datasink, "niftis")
+    pop_last = lambda x: [x[0]] if type(x) is list else x
+    workflow.connect(datasource, ('dicoms', pop_last_get_dir), converter, "dicom_dir")
+    workflow.connect(datasource, ('dicoms', pop_last_get_dir), converter, "base_output_dir")
+    #workflow.connect(datasource, ('dicoms', pop_last), dicomheaders, "dicom_file")
+    #workflow.connect(dicomheaders, "dicom_header", openfmri_organization, "dicom_header")
+    #workflow.connect(converter, "out_file", openfmri_organization, "niftis")
+    #workflow.connect(converter, "converted_files", datasink, "niftis")
 
     workflow.base_dir = os.environ.get("SCRATCH", "/tmp")
     return workflow
