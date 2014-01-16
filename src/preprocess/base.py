@@ -81,6 +81,10 @@ def get_dicom_headers(dicom_file):
     import dicom
     import nipype.utils.filemanip
     from nipype import logging
+    
+    if type(dicom_file) is list:
+        dicom_file = dicom_file.pop()
+    
     iflogger = logging.getLogger('interface')
     iflogger.debug('Getting headers from {}'.format(dicom_file))
     headers = dicom.read_file(dicom_file)
@@ -93,7 +97,7 @@ def get_dicom_headers(dicom_file):
     return dicom_file + '.pklz'
 
 
-def direct_nifti_to_directory(dicom_header, niftis, base_directory):
+def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, bvecs=None):
     """Move nifti file to the correct directory for the subject
     @param dicom_headers: dicom_header object created by dicom.read_file and stored in a pickle dump
     @param nifti_file: a list of nifti files to move
@@ -113,9 +117,11 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
     FIELDMAP = 3
     LOCALIZER = 4
     REFERENCE = 5
+    DERIVED = 6
     
     from nipype import logging
     iflogger = logging.getLogger('interface')
+    wlogger = logging.getLogger('workflow')
     
     iflogger.debug('Enetering direct nifti with inputs {} {} {} '.format(dicom_header, niftis, base_directory))
     
@@ -143,10 +149,16 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                     (dicom_header.SeriesDescription.lower().find(key.lower()) > -1) or \
                     (dicom_header.SequenceName.lower().find(key.lower()) > -1):
                         file_type = i
+                        
+        if dicom_header.ImageType[0] != "ORIGINAL":
+            file_type = DERIVED
+                
     except AttributeError, e:
         iflogger.warning("Nifti File(s) {} not processed because Dicom header dataset throwing error {} \n ".format(niftis, e)
                          + "Check your dicom headers")
         return []
+    
+        
     
     iflogger.debug('Direct nifti passed attribute checks')
     
@@ -172,7 +184,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
             for key in ['mprage', 't1w']:
                 if nifti_basename.lower().find(key) > 0:
                     mprage = True
-            
+            #MPRage files are high res anatomy and are named appropriately
             if nifti_basename.find('o') == 0 and mprage:
                 
                 highres_count = 0
@@ -184,6 +196,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                 nipype.utils.filemanip.copyfile(
                     nifti_file, destination, copy=True)
                 
+            #PDT2 files are inplane brains
             if nifti_basename.lower().find('PDT2'.lower()) > 0 and not mprage:
                 inplane_count = 0
                 if os.path.exists(os.path.join(base_directory, 'anatomy')):
@@ -197,6 +210,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                     nifti_file, os.path.join(base_directory, 'anatomy', 'other', nifti_basename), copy=True)
                 
             else:
+                #we aren't sure what type of anat file it is and just throw it in the "other" directory
                 if not os.path.exists(os.path.join(base_directory, 'anatomy', 'other')):
                     os.makedirs(os.path.join(base_directory, 'anatomy', 'other'))
                 destination = os.path.join(base_directory, 'anatomy', 'other', nifti_basename)
@@ -204,6 +218,7 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
                     nifti_file, destination, copy=True)
             
         elif file_type == BOLD:
+            #bold files are stored in <dataset>/bold/runame_runnumber/bold.nii
             iflogger.debug("File {} is of type BOLD".format(nifti_file))
             try:
                 run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
@@ -221,21 +236,56 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
             nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
             
         elif file_type == DTI:
-            
+            #DTI files are stored in <dataset>/dti/DTI_###.nii.gz with a number starting at 1
             iflogger.debug('File type of {} is dti'.format(nifti_file))
             
             dti_count = 0
             if os.path.exists(os.path.join(base_directory, 'dti')):
                 iflogger.debug('dit path {} exists, skipping creation'.format(os.path.join(base_directory, 'dti')))
-                dti_count = int(len([ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'DTI' in item ]) / 3)
+                
+                #all this wrangling is just to avoid a regex
+                #first three lines just find anything of the format DTI_<something>.<extension>
+                #then cut off the "DTI_" and ".extension" parts
+                dti_count = [ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'DTI' in item ]
+                dti_count = [item.split('_').pop() for item in dti_count if item.find('_') > -1]
+                dti_count = [item.split('.')[0] for item in dti_count if item.find('.')]
+                #this just uniquifies the list and typecasts whats left into ints
+                dti_count = set([int(item) for item in dti_count])
+                dti_count = list(dti_count)
+                #the length of dti_count should be the number of files of the type DTI_###.ext in the dir
+                dti_count = len(dti_count) + 1
+                
+                iflogger.debug('DTI count is {} for DTI file {}'.format(dti_count, nifti_file))
+                
             else:
                 iflogger.debug('Creating dti directory {}'.format(os.path.join(base_directory, 'dti')))
                 os.makedirs(os.path.join(base_directory, 'dti'))
             
+            #copy the nifti into the dti dir with the rename
             destination = os.path.join(base_directory, 'dti', 'DTI_{0:03d}'.format(dti_count + 1) + nifti_extension)
             nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
+            
+            #now for the bvecs and vals
+            if type(bvecs) is not list:
+                bvecs = [bvecs]
+                
+            for bvec in bvecs:
+                destination = os.path.join(base_directory, 'dti', 'DTI_{0:03d}'.format(dti_count + 1) + ".bvec")
+                nipype.utils.filemanip.copyfile(bvec, destination, copy=True)
+            
+            
+            if type(bvals) is not list:
+                bvals = [bvals]
+            
+            for bval in bvals:
+                destination = os.path.join(base_directory, 'dti', 'DTI_{0:03d}'.format(dti_count + 1) + ".bval") 
+                nipype.utils.filemanip.copyfile(bval, destination, copy=True)
+            
+            iflogger.debug('successfully moved DTI files {}, {}, {}'.format(nifti_file, bvecs, bvals))
         
         elif file_type == FIELDMAP:
+            #here we're betting that the first fieldmap is the mag and the second is the phase
+            #it's brittle but there isn't a good way to tell them apart from the headers.
             fieldmap_count = 0
             if os.path.exists(os.path.join(base_directory, 'fieldmap')):
                 fieldmap_count = len([ item for item in os.listdir(os.path.join(base_directory, 'fieldmap')) if 'fieldmap' in item ])
@@ -252,17 +302,28 @@ def direct_nifti_to_directory(dicom_header, niftis, base_directory):
             else:
                 destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_{0:03d}'.format(fieldmap_count + 1) + nifti_extension)
                 nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
+        elif file_type == DERIVED:
+            #derived filetypes we process the original data and leave it in the work directory
+            #we don't really want or need them , but process them for 
+            wlogger.info('File {} is a derived series, skipping further processing'.format(nifti_file))
+            
+    #this is a filetype we don't want to keep in openfmri style datasets, don't copy and return the original niftis
+    #for compatibility
+    if file_type == REFERENCE or file_type == LOCALIZER or file_type == DERIVED:
+        return niftis
 
-    if destination == "" and not (file_type == REFERENCE or file_type == LOCALIZER):
+    #we didn't assign it a destination somehow even though it's a type of file we wanted to keep, throw an error
+    if destination == "" :
         raise IOError('Failed to assign file {0} with filetype {1} to a directory'.format(niftis, file_type))
     else:
+        #file is one we needed and was assigned a destination, copy its headers next to it
         root, ext = os.path.splitext(os.path.basename(destination))
         if root.endswith('nii'):
             root, ext = os.path.splitext(root)
         headers_destination = os.path.join(os.path.dirname(destination), root + '.pklz')
         nipype.utils.filemanip.copyfile(dicom_header_filename, headers_destination, copy=True)
         return niftis
-    
+    #this should never execute but will cause an error if we get here
     return destination
         
     
@@ -799,6 +860,7 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
     converter.inputs.nii_output = True
     #ignore exceptions on bad inputs to prevent a full crash from one bad scan
     converter.inputs.ignore_exception = True
+    converter.inputs.gzip_output = True
     
     #this is a function interface that grabs the dicom info for later
     dicomheaders = nipype.pipeline.engine.Node(
@@ -809,7 +871,7 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
 
 
     openfmri_organization = nipype.pipeline.engine.Node(
-                                nipype.interfaces.utility.Function(input_names=["dicom_header","niftis","base_directory"],
+                                nipype.interfaces.utility.Function(input_names=["base_directory", "dicom_header","niftis","bvecs", "bvals" ],
                                                                    output_names = ["destination"],
                                                                    function=direct_nifti_to_directory),
                                                         name="openfmri_organization")
@@ -827,12 +889,14 @@ def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
     workflow.connect(infosource, 'scan_id', datasource, 'scan_id')
     #lambda function that just runs pop() on any list you hand it
     pop_last = lambda x: [x[0]] if type(x) is list else x
-    workflow.connect(datasource, ('dicoms', pop_last_get_dir), converter, "dicom_dir")
-    workflow.connect(datasource, ('dicoms', pop_last_get_dir), converter, "base_output_dir")
-    #workflow.connect(datasource, ('dicoms', pop_last), dicomheaders, "dicom_file")
-    #workflow.connect(dicomheaders, "dicom_header", openfmri_organization, "dicom_header")
-    #workflow.connect(converter, "out_file", openfmri_organization, "niftis")
-    #workflow.connect(converter, "converted_files", datasink, "niftis")
+    #workflow.connect(datasource, ('dicoms', pop_last_get_dir), converter, "dicom_dir")
+    workflow.connect(datasource, ('dicoms', pop_last), converter, "source_names")
+    workflow.connect(datasource, ('dicoms', pop_last), dicomheaders, "dicom_file")
+    workflow.connect(dicomheaders, "dicom_header", openfmri_organization, "dicom_header")
+    workflow.connect(converter, "converted_files", openfmri_organization, "niftis")
+    workflow.connect(converter, "bvals", openfmri_organization, "bvals")
+    workflow.connect(converter, "bvecs", openfmri_organization, "bvecs")
+    workflow.connect(converter, "converted_files", datasink, "niftis")
 
     workflow.base_dir = os.environ.get("SCRATCH", "/tmp")
     return workflow
