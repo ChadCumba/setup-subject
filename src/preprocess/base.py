@@ -239,30 +239,21 @@ def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, 
             #DTI files are stored in <dataset>/dti/DTI_###.nii.gz with a number starting at 1
             iflogger.debug('File type of {} is dti'.format(nifti_file))
             
-            dti_count = 0
-            if os.path.exists(os.path.join(base_directory, 'dti')):
-                iflogger.debug('dit path {} exists, skipping creation'.format(os.path.join(base_directory, 'dti')))
+            try:
+                run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
+                run_name = dicom_header.ProtocolName.replace(' ','_')
+                run_directory = os.path.join(base_directory, 'dti','%s_%s'%(run_name,run_number))
                 
-                #all this wrangling is just to avoid a regex
-                #first three lines just find anything of the format DTI_<something>.<extension>
-                #then cut off the "DTI_" and ".extension" parts
-                dti_count = [ item for item in os.listdir(os.path.join(base_directory, 'dti')) if 'DTI' in item ]
-                dti_count = [item.split('_').pop() for item in dti_count if item.find('_') > -1]
-                dti_count = [item.split('.')[0] for item in dti_count if item.find('.')]
-                #this just uniquifies the list and typecasts whats left into ints
-                dti_count = set([int(item) for item in dti_count])
-                dti_count = list(dti_count)
-                #the length of dti_count should be the number of files of the type DTI_###.ext in the dir
-                dti_count = len(dti_count) + 1
+                if not os.path.exists(os.path.join(base_directory, 'dti','%s_%s'%(run_name,run_number))):
+                    os.makedirs(os.path.join(base_directory, 'dti','%s_%s'%(run_name,run_number)))
                 
-                iflogger.debug('DTI count is {} for DTI file {}'.format(dti_count, nifti_file))
-                
-            else:
-                iflogger.debug('Creating dti directory {}'.format(os.path.join(base_directory, 'dti')))
-                os.makedirs(os.path.join(base_directory, 'dti'))
+            except Exception, e: 
+                raise('unable to parse run number from nifti file {}'.format(nifti_file))
+            
+            
             
             #copy the nifti into the dti dir with the rename
-            destination = os.path.join(base_directory, 'dti', 'DTI_{0:03d}'.format(dti_count + 1) + nifti_extension)
+            destination = os.path.join(base_directory, 'dti', run_directory, 'dti' + nifti_extension)
             nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
             
             #now for the bvecs and vals
@@ -270,15 +261,14 @@ def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, 
                 bvecs = [bvecs]
                 
             for bvec in bvecs:
-                destination = os.path.join(base_directory, 'dti', 'DTI_{0:03d}'.format(dti_count + 1) + ".bvec")
+                destination = os.path.join(base_directory, 'dti', run_directory, "dti.bvec")
                 nipype.utils.filemanip.copyfile(bvec, destination, copy=True)
-            
             
             if type(bvals) is not list:
                 bvals = [bvals]
             
             for bval in bvals:
-                destination = os.path.join(base_directory, 'dti', 'DTI_{0:03d}'.format(dti_count + 1) + ".bval") 
+                destination = os.path.join(base_directory, 'dti', run_directory, "dti.bval") 
                 nipype.utils.filemanip.copyfile(bval, destination, copy=True)
             
             iflogger.debug('successfully moved DTI files {}, {}, {}'.format(nifti_file, bvecs, bvals))
