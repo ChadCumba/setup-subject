@@ -30,8 +30,13 @@ if DEBUG:
     sys.path.insert(0, "/work/01551/ccumba/setup_subject/src")
 import os
 import glob
+
+"""
+importing scipy or numpy causes extreme slowdown in the script, to avoid this so that the 
+command line is snappy we only import modules that load numpy/scipy when they are needed.
+listing them in this comment :
+
 import xnat_tools
-import dicom
 
 import nipype.pipeline.engine
 import nipype.interfaces.utility
@@ -41,13 +46,13 @@ import nipype.interfaces.fsl.preprocess
 import nipype.interfaces.freesurfer.preprocess
 import nipype.utils.filemanip
 import nipype.interfaces.fsl.epi
-
-
-
+from nipype.interfaces.freesurfer.preprocess import ReconAll
 
 import qa
+"""
 
-from nipype.interfaces.freesurfer.preprocess import ReconAll
+
+
 
 from optparse import OptionParser
 
@@ -95,6 +100,7 @@ def get_dicom_headers(dicom_file):
     nipype.utils.filemanip.savepkl(dicom_file + '.pklz', headers)
     
     return dicom_file + '.pklz'
+
 
 
 def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, bvecs=None):
@@ -236,7 +242,7 @@ def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, 
             nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
             
         elif file_type == DTI:
-            #DTI files are stored in <dataset>/dti/DTI_###.nii.gz with a number starting at 1
+            #DTI files are stored in <dataset>/dti/runname_runnnumber/DTI.nii.gz with a number starting at 1
             iflogger.debug('File type of {} is dti'.format(nifti_file))
             
             try:
@@ -276,7 +282,7 @@ def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, 
         elif file_type == FIELDMAP:
             #here we're betting that the first fieldmap is the mag and the second is the phase
             #it's brittle but there isn't a good way to tell them apart from the headers.
-            fieldmap_count = 0
+            run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')   
             if os.path.exists(os.path.join(base_directory, 'fieldmap')):
                 fieldmap_count = len([ item for item in os.listdir(os.path.join(base_directory, 'fieldmap')) if 'fieldmap' in item ])
                 iflogger.debug('fieldmap count is {}'.format(fieldmap_count))
@@ -447,6 +453,7 @@ def main(argv=None):
         return 2
     
     if opts.get_data :
+        import xnat_tools
         #we aren't doing this with an XNATSource node because the current implementation cannot download
         #more than 10 files at once
         if DEBUG:
@@ -458,6 +465,8 @@ def main(argv=None):
         if not os.path.exists(os.path.join(opts.data_directory, opts.subject, 'raw')):
                 os.makedirs(os.path.join(opts.data_directory, opts.subject, 'raw'))
         xnat_tools.down_subject_dicoms(XNAT_SERVER, os.path.join(opts.data_directory, opts.subject, 'raw'), opts.project, opts.subject)
+
+    
 
     if opts.dicom_to_nifti:
         if opts.subject == "all":
@@ -488,6 +497,16 @@ def preprocess_dataset(data_directory, subject=None, model_id=None, task_id=None
     
     @param work_directory - directory to store transitional files
     """
+    
+    import nipype.pipeline.engine
+    import nipype.interfaces.utility
+    import nipype.interfaces.io
+    import nipype.interfaces.fsl.preprocess
+    import nipype.interfaces.fsl.epi
+    
+    import qa
+    
+    from nipype.interfaces.freesurfer.preprocess import ReconAll 
 
     from nipype import logging
     iflogger = logging.getLogger('interface')
@@ -815,6 +834,11 @@ def analyze_openfmri_dataset(data_directory, subject=None, model_id=None, task_i
                                             "-pe 12way 24 -M chad.cumba@mail.utexas.edu")})
 
 def openfmri_dicom_to_nifti(openfmri_subject_directory, subject_id):
+    
+    import nipype.pipeline.engine
+    import nipype.interfaces.utility
+    import nipype.interfaces.io
+    import nipype.interfaces.dcm2nii
     
     scans_container = os.path.join(openfmri_subject_directory, subject_id, 'raw', subject_id)
     scan_directories = [directory for directory in os.listdir(scans_container)  ]
