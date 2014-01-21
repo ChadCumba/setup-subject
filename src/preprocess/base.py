@@ -169,10 +169,17 @@ def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, 
         
         nifti_extension = '.nii'
         
-        if os.path.split(nifti_basename)[1] == '.gz':
+        if str(os.path.split(nifti_basename)[1]).endswith( '.gz'):
             nifti_extension = '.nii.gz'                  
         iflogger.debug('Passed filesplit on {}, file type is {}'.format(nifti_basename, file_type))
         
+        try:
+            run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
+            run_name = dicom_header.ProtocolName.replace(' ','_')
+               
+        except Exception, e: 
+            raise('unable to parse run number from nifti file {}'.format(nifti_file))
+
         if file_type == ANATOMY:
             try:
                 run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
@@ -225,13 +232,13 @@ def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, 
                 run_name = dicom_header.ProtocolName.replace(' ','_')
                 run_directory = os.path.join(base_directory, 'bold','%s_%s'%(run_name,run_number))
                 
-                if not os.path.exists(os.path.join(base_directory, 'bold','%s_%s'%(run_name,run_number))):
-                    os.makedirs(os.path.join(base_directory, 'bold','%s_%s'%(run_name,run_number)))
+                if not os.path.exists(run_directory):
+                    os.makedirs(run_directory)
                 
             except Exception, e: 
                 raise('unable to parse run number from nifti file {}'.format(nifti_file))
             
-            destination = os.path.join(base_directory, 'bold', run_directory, 'bold' + nifti_extension)
+            destination = os.path.join(run_directory, 'bold' + nifti_extension)
             iflogger.debug("Sending file {} to destination {}".format(nifti_file, destination))
             nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
             
@@ -276,22 +283,15 @@ def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, 
         elif file_type == FIELDMAP:
             #here we're betting that the first fieldmap is the mag and the second is the phase
             #it's brittle but there isn't a good way to tell them apart from the headers.
-            fieldmap_count = 0
-            if os.path.exists(os.path.join(base_directory, 'fieldmap')):
-                fieldmap_count = len([ item for item in os.listdir(os.path.join(base_directory, 'fieldmap')) if 'fieldmap' in item ])
-                iflogger.debug('fieldmap count is {}'.format(fieldmap_count))
-            else:
-                os.makedirs(os.path.join(base_directory, 'fieldmap'))
+            run_directory = os.path.join(base_directory, 'fieldmap', '{}_{}'.format(run_name, run_number))
+            if not os.path.exists(run_directory):
+                os.makedirs(run_directory)
+            
+            destination = os.path.join(run_directory, 'fieldmap' + nifti_extension)
+            iflogger.debug('copying fieldmap {} to {}'.format(nifti_file, destination))
         
-            if fieldmap_count == 0:
-                destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_mag' + nifti_extension)
-                nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
-            elif fieldmap_count == 1:
-                destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_phase' + nifti_extension)
-                nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
-            else:
-                destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_{0:03d}'.format(fieldmap_count + 1) + nifti_extension)
-                nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
+            nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
+
         elif file_type == DERIVED:
             #derived filetypes we process the original data and leave it in the work directory
             #we don't really want or need them , but process them for 
