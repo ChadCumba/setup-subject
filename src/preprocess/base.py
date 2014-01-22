@@ -175,10 +175,17 @@ def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, 
         
         nifti_extension = '.nii'
         
-        if os.path.split(nifti_basename)[1] == '.gz':
+        if str(os.path.split(nifti_basename)[1]).endswith( '.gz'):
             nifti_extension = '.nii.gz'                  
         iflogger.debug('Passed filesplit on {}, file type is {}'.format(nifti_basename, file_type))
         
+        try:
+            run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
+            run_name = dicom_header.ProtocolName.replace(' ','_')
+               
+        except Exception, e: 
+            raise('unable to parse run number from nifti file {}'.format(nifti_file))
+
         if file_type == ANATOMY:
             try:
                 run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')
@@ -203,7 +210,7 @@ def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, 
                     nifti_file, destination, copy=True)
                 
             #PDT2 files are inplane brains
-            if nifti_basename.lower().find('PDT2'.lower()) > 0 and not mprage:
+            if nifti_basename.lower().find('PDT2'.lower()) >= 0 and not mprage:
                 inplane_count = 0
                 if os.path.exists(os.path.join(base_directory, 'anatomy')):
                     inplane_count = len([ item for item in os.listdir(os.path.join(base_directory, 'anatomy')) if 'inplane' in item])
@@ -231,13 +238,13 @@ def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, 
                 run_name = dicom_header.ProtocolName.replace(' ','_')
                 run_directory = os.path.join(base_directory, 'bold','%s_%s'%(run_name,run_number))
                 
-                if not os.path.exists(os.path.join(base_directory, 'bold','%s_%s'%(run_name,run_number))):
-                    os.makedirs(os.path.join(base_directory, 'bold','%s_%s'%(run_name,run_number)))
+                if not os.path.exists(run_directory):
+                    os.makedirs(run_directory)
                 
             except Exception, e: 
                 raise('unable to parse run number from nifti file {}'.format(nifti_file))
             
-            destination = os.path.join(base_directory, 'bold', run_directory, 'bold' + nifti_extension)
+            destination = os.path.join(run_directory, 'bold' + nifti_extension)
             iflogger.debug("Sending file {} to destination {}".format(nifti_file, destination))
             nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
             
@@ -282,22 +289,16 @@ def direct_nifti_to_directory(base_directory, dicom_header, niftis, bvals=None, 
         elif file_type == FIELDMAP:
             #here we're betting that the first fieldmap is the mag and the second is the phase
             #it's brittle but there isn't a good way to tell them apart from the headers.
-            run_number = nifti_basename.rsplit('a')[-2].rsplit('s')[-1].lstrip('0')   
-            if os.path.exists(os.path.join(base_directory, 'fieldmap')):
-                fieldmap_count = len([ item for item in os.listdir(os.path.join(base_directory, 'fieldmap')) if 'fieldmap' in item ])
-                iflogger.debug('fieldmap count is {}'.format(fieldmap_count))
-            else:
-                os.makedirs(os.path.join(base_directory, 'fieldmap'))
+
+            run_directory = os.path.join(base_directory, 'fieldmap', '{}_{}'.format(run_name, run_number))
+            if not os.path.exists(run_directory):
+                os.makedirs(run_directory)
+            
+            destination = os.path.join(run_directory, 'fieldmap' + nifti_extension)
+            iflogger.debug('copying fieldmap {} to {}'.format(nifti_file, destination))
         
-            if fieldmap_count == 0:
-                destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_mag' + nifti_extension)
-                nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
-            elif fieldmap_count == 1:
-                destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_phase' + nifti_extension)
-                nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
-            else:
-                destination = os.path.join(base_directory, 'fieldmap', 'fieldmap_{0:03d}'.format(fieldmap_count + 1) + nifti_extension)
-                nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
+            nipype.utils.filemanip.copyfile(nifti_file, destination, copy=True)
+
         elif file_type == DERIVED:
             #derived filetypes we process the original data and leave it in the work directory
             #we don't really want or need them , but process them for 
@@ -477,14 +478,14 @@ def main(argv=None):
             workflow = openfmri_dicom_to_nifti(opts.data_directory, opts.subject)
             workflow.run()
     if any([opts.autorecon_all, opts.melodic, opts.motion_correction, opts.skull_strip, opts.dti_qa, opts.fmri_qa, opts.process_fieldmap]):
-        workflow = preprocess_dataset(opts.data_directory, subject=opts.subject, model_id=opts.model_id, task_id=opts.task_id,
+        workflow = preprocess_dataset(opts.data_directory, opts.subject, model_id=opts.model_id, task_id=opts.task_id,
                                  work_directory=opts.work_directory, xnat_datasource=opts.get_data,
                                  run_motion_correction=opts.motion_correction, run_skull_strip=opts.skull_strip, 
                                  run_melodic=opts.melodic, run_autorecon=opts.autorecon_all, run_dti_qa=opts.dti_qa,
                                  run_fmri_qa=opts.fmri_qa, run_process_fieldmap=opts.process_fieldmap)
         workflow.run()
 
-def preprocess_dataset(data_directory, subject=None, model_id=None, task_id=None,  work_directory=None, xnat_datasource=False,
+def preprocess_dataset(data_directory, subject, model_id=None, task_id=None,  work_directory=None, xnat_datasource=False,
                              run_motion_correction=False, run_skull_strip=False, run_melodic=False, run_autorecon=False,
                              run_dti_qa=False, run_fmri_qa=False, run_process_fieldmap=False):
     """
@@ -509,57 +510,35 @@ def preprocess_dataset(data_directory, subject=None, model_id=None, task_id=None
     from nipype.interfaces.freesurfer.preprocess import ReconAll 
 
     from nipype import logging
-    iflogger = logging.getLogger('interface')
+    wflogger = logging.getLogger('workflow')
 
-    subjects = [path.split(os.path.sep)[-1] for path in glob.glob(os.path.join(data_directory, '*'))]
-    bolddirs_by_subject = {}
-    dti_runs_by_subject = {}
-    for item in subjects:
-        
-        bolddirs_by_subject[item] = [path.split(os.path.sep)[-1] for path in glob.glob(os.path.join(data_directory, item, 'bold', '*'))]
-        files_no_ext = [path[0:path.find('.')] for path in glob.glob(os.path.join(data_directory, item, '[Dd][Tt][Ii]', "*"))]
-        
-        iflogger.debug('files no ext is {}'.format(files_no_ext))
-
-        non_unique_dti_runs = [path[0:path.find('_', path.find('_') + 1)] if path.count('_') > 1 else path for path in map(os.path.basename,files_no_ext)]
-        
-        iflogger.debug('non unique runs is {}'.format(non_unique_dti_runs))
-        unique_dti_runs = set([path for path in non_unique_dti_runs if path.lower().startswith('dti')])
-        
-        iflogger.debug('unique runs is {}'.format(unique_dti_runs))
-        dti_runs_by_subject[item] = list(unique_dti_runs)
-
-        iflogger.debug('dti runs for {} is {}'.format(item, dti_runs_by_subject[item]))
+    if not os.path.exists(os.path.join(data_directory, subject)):
+        raise IOError("Subject directory {0} not found".format(os.path.join(data_directory,subject)))
     
-    iflogger.debug('prepping infosource')
+    subject_directory = os.path.join(data_directory, subject)
+    
+    bold_directories = [path.split(os.path.sep)[-1] for path in glob.glob(os.path.join(subject_directory, '[Bb][Oo][Ll][Dd]', '*'))]
+    dti_directories = [path.split(os.path.sep)[-1] for path in glob.glob(os.path.join(subject_directory, '[Dd][Tt][Ii]', '*'))]
+    fieldmap_directories = [path.split(os.path.sep)[-1] for path in glob.glob(os.path.join(subject_directory, '[Ff]ieldmap', '*'))]
+        
+    wflogger.debug('prepping infosource')
     infosource = nipype.pipeline.engine.Node(
-                    nipype.interfaces.utility.IdentityInterface(fields=["subject_id", "bold_dirs", "dti_runs"]),
+                    nipype.interfaces.utility.IdentityInterface(fields=["bold_dirs", "dti_dirs", "fieldmap_dirs"]),
                     name="infosource")
     
-    if subject is None:
-        infosource.iterables = [("subject_id", subjects)]
-    else:
-        iflogger.debug('iterables are subject_id {}, bold_dirs {}, dti_runs {}'.format([subjects[subjects.index(subject)]],bolddirs_by_subject[subject],dti_runs_by_subject[subject]))
-        infosource.iterables = [("subject_id", [subjects[subjects.index(subject)]]),
-                                ("bold_dirs", bolddirs_by_subject[subject]),
-                                ("dti_runs", dti_runs_by_subject[subject])]
     
- 
     #setup the datasources
     datasource = nipype.pipeline.engine.Node(
-                    nipype.interfaces.io.DataGrabber(infields=["subject_id", "bold_dirs", "dti_runs"],
-                                                     outfields=["anat", "bold", "dti", "headers"]),
+                    nipype.interfaces.io.DataGrabber(infields=[ "bold_dirs", "dti_dirs", "fieldmap_dirs"],
+                                                     outfields=["anat", "bold", "dti", "fieldmap"]),
                                              name="datasource")
     
-    datasource.inputs.base_directory = data_directory
+    datasource.inputs.base_directory = subject_directory
     datasource.inputs.template = "*"
-    datasource.inputs.field_template = {
-                                        "bold" : "%s/bold/%s/bold.nii*"
-                                        }
-    datasource.inputs.template_args = {
-                                       "bold" : [["subject_id", "bold_dirs"]]
-                                       }
     datasource.inputs.sort_filelist = True
+    datasource.inputs.field_template = dict()
+    datasource.inputs.template_args = dict()
+
     
     workflow = nipype.pipeline.engine.Workflow(name="openfmri")
     
@@ -568,13 +547,32 @@ def preprocess_dataset(data_directory, subject=None, model_id=None, task_id=None
         
     workflow.base_dir = work_directory
     
-    workflow.connect(infosource, "subject_id", datasource, "subject_id")
-    workflow.connect(infosource, "bold_dirs", datasource, "bold_dirs")
+    #connect iterable directories if they exist
+    infosource.iterables = []
+    if len(bold_directories) > 0:
+        infosource.iterables.append(("bold_dirs", bold_directories))
+        datasource.inputs.field_template["bold"] = "bold/%s/bold.nii*"
+        datasource.inputs.template_args["bold"] = [["bold_dirs"]]
+        workflow.connect(infosource, "bold_dirs", datasource, "bold_dirs")
+    if len(dti_directories) > 0:
+        infosource.iterables.append(("dti_dirs", dti_directories))
+        datasource.inputs.field_template["dti"] = "dti/%s/*.nii*"
+        datasource.inputs.template_args["dti"] = [["dti_dirs"]]
+        workflow.connect(infosource, "dti_dirs", datasource, "dti_dirs")
+    if len(fieldmap_directories) > 0:
+        infosource.iterables.append(("fieldmap_dirs", fieldmap_directories))
+        datasource.inputs.field_template["fieldmap"] = "fieldmap/%s/fieldmap.nii*"
+        datasource.inputs.template_args["fieldmap"] = [["fieldmap_dirs"]]
+        workflow.connect(infosource, "fieldmap_dirs", datasource, "fieldmap_dirs")
     
 
     #Data storage and sink
     datasink = nipype.pipeline.engine.Node(nipype.interfaces.io.DataSink(), name="datasink")
-    datasink.inputs.base_directory = OUTPUT_DIR
+    
+    datasink.inputs.base_directory = subject_directory
+    
+    if DEBUG:
+        datasink.inputs.base_directory = OUTPUT_DIR
     
     #FSL mcflirt motion correction
     if any([run_motion_correction, run_skull_strip, run_melodic, run_fmri_qa]):
@@ -583,14 +581,12 @@ def preprocess_dataset(data_directory, subject=None, model_id=None, task_id=None
                                 name="motion_correction")
         motion_correction.inputs.terminal_output = "file"
         workflow.connect(datasource, "bold", motion_correction, "in_file")
-        workflow.connect(motion_correction, "out_file", datasink, 'bold_mcf')
+        workflow.connect(motion_correction, "out_file", datasink, 'bold.@bold_mcf')
 
     #run QA report for dti files
     if run_dti_qa:
         
-        datasource.inputs.field_template['dti'] = "%s/dti/%s.nii*"
-        datasource.inputs.template_args['dti'] = [["subject_id", "dti_runs"]]
-        workflow.connect(infosource, "dti_runs", datasource, "dti_runs")
+        workflow.connect(infosource, "dti_dirs", datasource, "dti_dirs")
         
         dti_qa = nipype.pipeline.engine.Node(
                     interface=qa.DTIQATask(),
@@ -608,8 +604,8 @@ def preprocess_dataset(data_directory, subject=None, model_id=None, task_id=None
     
     if run_fmri_qa:
         
-        datasource.inputs.field_template['headers'] = "%s/bold/%s/bold.pklz"
-        datasource.inputs.template_args['headers'] = [["subject_id", "bold_dirs"]]
+        datasource.inputs.field_template['headers'] = "bold/%s/bold.pklz"
+        datasource.inputs.template_args['headers'] = [[ "bold_dirs"]]
         
         temporal_resolution = nipype.pipeline.engine.Node(
                                 nipype.interfaces.utility.Function(input_names=["dicom_header"],
@@ -648,7 +644,7 @@ def preprocess_dataset(data_directory, subject=None, model_id=None, task_id=None
                         name="skull_strip")
         workflow.connect(motion_correction, "out_file", skull_strip, "in_file")
         skull_strip.inputs.terminal_output = 'file'
-        workflow.connect(skull_strip, "out_file", datasink, "bold_mcf_brain")
+        workflow.connect(skull_strip, "out_file", datasink, "bold.@bold_mcf_brain")
         
     #melodic analysis
     if run_melodic:
@@ -678,17 +674,13 @@ def preprocess_dataset(data_directory, subject=None, model_id=None, task_id=None
                             name="prepare_fieldmap")
         prepare_fieldmap.inputs.output_type="NIFTI_GZ"
         
-        #set the datasource to look for the fieldmap file(s)
-        datasource.inputs.field_template['phase'] = "%s/fieldmap/fieldmap_mag.nii*"
-        datasource.inputs.field_template['magnitude'] = datasource.inputs.field_template['phase']
-        datasource.inputs.template_args['phase'] = [["subject_id"]]
-        datasource.inputs.template_args['magnitude'] = datasource.inputs.template_args['phase']
+        
         
         #skull strip the fieldmap file
         fieldmap_skull_strip = nipype.pipeline.engine.Node(
                         interface=nipype.interfaces.fsl.BET(),
                         name="fieldmap_skull_strip")
-        workflow.connect(datasource, "phase", fieldmap_skull_strip, "in_file")
+        workflow.connect(datasource, "fieldmap", fieldmap_skull_strip, "in_file")
         fieldmap_skull_strip.inputs.terminal_output = 'file'
                 
         workflow.connect(fieldmap_skull_strip, "out_file", prepare_fieldmap, "in_phase")
