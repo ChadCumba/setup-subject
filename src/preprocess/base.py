@@ -528,17 +528,17 @@ def preprocess_dataset(data_directory, subject, model_id=None, task_id=None,  wo
     
     
     #setup the datasources
-    datasource = nipype.pipeline.engine.Node(
-                    nipype.interfaces.io.DataGrabber(infields=[ "bold_dirs", "dti_dirs", "fieldmap_dirs"],
-                                                     outfields=["anat", "bold", "dti", "fieldmap"]),
-                                             name="datasource")
-    
-    datasource.inputs.base_directory = subject_directory
-    datasource.inputs.template = "*"
-    datasource.inputs.sort_filelist = True
-    datasource.inputs.field_template = dict()
-    datasource.inputs.template_args = dict()
-
+    infosource.iterables = []
+    infosource.iterables.append(("bold_dirs", bold_directories))
+    boldsource = nipype.pipeline.engine.Node(
+                        nipype.interfaces.io.DataGrabber(infields=["bold_dirs"],
+                                                         outfields=["bold", "headers"]),
+                                            name="boldsource")
+    boldsource.inputs.base_directory = os.path.join(subject_directory, "bold")
+    boldsource.inputs.template = "*"
+    boldsource.inputs.sort_filelist = True
+    boldsource.inputs.field_template = {"bold" : "%s/bold.nii*"}
+    boldsource.inputs.template_args = {"bold" : [["bold_dirs"]]}
     
     workflow = nipype.pipeline.engine.Workflow(name="openfmri")
     
@@ -546,26 +546,9 @@ def preprocess_dataset(data_directory, subject, model_id=None, task_id=None,  wo
         work_directory = os.path.join(os.getcwd(),'working')
         
     workflow.base_dir = work_directory
-    
+    workflow.connect(infosource, "bold_dirs", boldsource, "bold_dirs")
     #connect iterable directories if they exist
-    infosource.iterables = []
-    if len(bold_directories) > 0:
-        infosource.iterables.append(("bold_dirs", bold_directories))
-        datasource.inputs.field_template["bold"] = "bold/%s/bold.nii*"
-        datasource.inputs.template_args["bold"] = [["bold_dirs"]]
-        workflow.connect(infosource, "bold_dirs", datasource, "bold_dirs")
-    if len(dti_directories) > 0:
-        infosource.iterables.append(("dti_dirs", dti_directories))
-        datasource.inputs.field_template["dti"] = "dti/%s/*.nii*"
-        datasource.inputs.template_args["dti"] = [["dti_dirs"]]
-        workflow.connect(infosource, "dti_dirs", datasource, "dti_dirs")
-    if len(fieldmap_directories) > 0:
-        infosource.iterables.append(("fieldmap_dirs", fieldmap_directories))
-        datasource.inputs.field_template["fieldmap"] = "fieldmap/%s/fieldmap.nii*"
-        datasource.inputs.template_args["fieldmap"] = [["fieldmap_dirs"]]
-        workflow.connect(infosource, "fieldmap_dirs", datasource, "fieldmap_dirs")
     
-
     #Data storage and sink
     datasink = nipype.pipeline.engine.Node(nipype.interfaces.io.DataSink(), name="datasink")
     
@@ -580,19 +563,17 @@ def preprocess_dataset(data_directory, subject, model_id=None, task_id=None,  wo
                                 interface=nipype.interfaces.fsl.preprocess.MCFLIRT(),
                                 name="motion_correction")
         motion_correction.inputs.terminal_output = "file"
-        workflow.connect(datasource, "bold", motion_correction, "in_file")
+        workflow.connect(boldsource, "bold", motion_correction, "in_file")
         workflow.connect(motion_correction, "out_file", datasink, 'bold.@bold_mcf')
 
     #run QA report for dti files
     if run_dti_qa:
         
-        workflow.connect(infosource, "dti_dirs", datasource, "dti_dirs")
         
         dti_qa = nipype.pipeline.engine.Node(
                     interface=qa.DTIQATask(),
                     name="dti_qa")
         
-        workflow.connect(datasource, "dti", dti_qa, "in_file")
         workflow.connect(dti_qa, "snr", datasink, "dti_qa")
         workflow.connect(dti_qa, "slice_corr", datasink, "dti_qa.@slice_corr")
         workflow.connect(dti_qa, "interleave_corr", datasink, "dti_qa.@interleave_corr")
@@ -604,12 +585,13 @@ def preprocess_dataset(data_directory, subject, model_id=None, task_id=None,  wo
     
     if run_fmri_qa:
         
-        datasource.inputs.field_template['headers'] = "bold/%s/bold.pklz"
-        datasource.inputs.template_args['headers'] = [[ "bold_dirs"]]
+        boldsource.inputs.field_template['headers'] = "%s/bold.pklz"
+        boldsource.inputs.template_args['headers'] = [[ "bold_dirs"]]
         
         temporal_resolution = nipype.pipeline.engine.Node(
                                 nipype.interfaces.utility.Function(input_names=["dicom_header"],
-                                                                   output_names=["temporal_resolution"]),
+                                                                   output_names=["temporal_resolution"],
+                                                                   function=get_TR),
                                                           name="temporal_resolution")
         
         fmri_qa = nipype.pipeline.engine.Node(
@@ -617,7 +599,7 @@ def preprocess_dataset(data_directory, subject, model_id=None, task_id=None,  wo
                     name="fmri_qa")
         
         workflow.connect(motion_correction, "out_file", fmri_qa, "in_file")
-        workflow.connect(datasource, "headers", temporal_resolution, "dicom_header")
+        workflow.connect(boldsource, "headers", temporal_resolution, "dicom_header")
         workflow.connect(temporal_resolution, "temporal_resolution", fmri_qa, "temporal_resolution")
         
         workflow.connect(fmri_qa, "confound", datasink, "fmri_qa.@confound") 
@@ -644,6 +626,7 @@ def preprocess_dataset(data_directory, subject, model_id=None, task_id=None,  wo
                         name="skull_strip")
         workflow.connect(motion_correction, "out_file", skull_strip, "in_file")
         skull_strip.inputs.terminal_output = 'file'
+        skull_strip.inputs.functional = True
         workflow.connect(skull_strip, "out_file", datasink, "bold.@bold_mcf_brain")
         
     #melodic analysis
@@ -662,7 +645,6 @@ def preprocess_dataset(data_directory, subject, model_id=None, task_id=None,  wo
                                     interface=ReconAll(),
                                     name="cortical_reconstruction")
         
-        workflow.connect(datasource, "anat", cortical_reconstruction, "T1_files" )
         workflow.connect(cortical_reconstruction, 'subject_id', datasink, 'container')
         workflow.connect(cortical_reconstruction, 'T1', datasink, 'highres')
     
@@ -680,7 +662,6 @@ def preprocess_dataset(data_directory, subject, model_id=None, task_id=None,  wo
         fieldmap_skull_strip = nipype.pipeline.engine.Node(
                         interface=nipype.interfaces.fsl.BET(),
                         name="fieldmap_skull_strip")
-        workflow.connect(datasource, "fieldmap", fieldmap_skull_strip, "in_file")
         fieldmap_skull_strip.inputs.terminal_output = 'file'
                 
         workflow.connect(fieldmap_skull_strip, "out_file", prepare_fieldmap, "in_phase")
